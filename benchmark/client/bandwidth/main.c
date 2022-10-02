@@ -51,8 +51,8 @@ struct rte_ether_addr DST_ADDR = {{0x04, 0x3f, 0x72, 0xde, 0xba, 0x44}};
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 1024
-#define RTE_TEST_TX_DESC_DEFAULT 1024
+#define RTE_TEST_RX_DESC_DEFAULT 16384
+#define RTE_TEST_TX_DESC_DEFAULT 16384
 static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
@@ -656,6 +656,7 @@ int main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",
 					 ret, portid);
+		printf("%2u %2u \n", nb_rxd, nb_txd);
 
 		printf("done: \n");
 

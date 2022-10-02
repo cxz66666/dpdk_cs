@@ -46,8 +46,8 @@ static int mac_updating = 1;
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
-#define MAX_PKT_BURST 32
-#define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
+#define MAX_PKT_BURST 128
+#define BURST_TX_DRAIN_US 1 /* TX drain every ~1us */
 #define MEMPOOL_CACHE_SIZE 256
 
 /*
@@ -108,7 +108,7 @@ struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* A tsc-based timer responsible for triggering statistics printout */
-static uint64_t timer_period = 10; /* default period is 10 seconds */
+static uint64_t timer_period = 1; /* default period is 10 seconds */
 
 /* Print out statistics on packets dropped */
 static void
@@ -636,6 +636,7 @@ int main(int argc, char **argv)
 
 		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
 											   &nb_txd);
+
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 					 "Cannot adjust number of descriptors: err=%d, port=%u\n",
