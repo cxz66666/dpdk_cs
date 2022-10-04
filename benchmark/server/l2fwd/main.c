@@ -46,15 +46,14 @@ static int mac_updating = 1;
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
-#define MAX_PKT_BURST 128
-#define BURST_TX_DRAIN_US 1 /* TX drain every ~1us */
-#define MEMPOOL_CACHE_SIZE 256
+#define MAX_PKT_BURST 4096
+#define MEMPOOL_CACHE_SIZE 512
 
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 1024
-#define RTE_TEST_TX_DESC_DEFAULT 1024
+#define RTE_TEST_RX_DESC_DEFAULT 16384
+#define RTE_TEST_TX_DESC_DEFAULT 16384
 static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
@@ -84,8 +83,6 @@ struct lcore_queue_conf
 } __rte_cache_aligned;
 struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
-static struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS];
-
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.split_hdr_size = 0,
@@ -102,20 +99,22 @@ struct l2fwd_port_statistics
 {
 	uint64_t tx;
 	uint64_t rx;
-	uint64_t dropped;
+	uint64_t tx_dropped;
 } __rte_cache_aligned;
 struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
+struct l2fwd_port_statistics port_statistics_period[RTE_MAX_ETHPORTS];
 
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* A tsc-based timer responsible for triggering statistics printout */
-static uint64_t timer_period = 1; /* default period is 10 seconds */
+static uint64_t timer_period = 1; /* default period is 1 seconds */
 
-/* Print out statistics on packets dropped */
+/* Print out statistics on packets tx_dropped */
 static void
 print_stats(void)
 {
 	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
 	unsigned portid;
+	uint64_t period = timer_period / rte_get_timer_hz();
 
 	total_packets_dropped = 0;
 	total_packets_tx = 0;
@@ -137,24 +136,28 @@ print_stats(void)
 		printf("\nStatistics for port %u ------------------------------"
 			   "\nPackets sent: %24" PRIu64
 			   "\nPackets received: %20" PRIu64
-			   "\nPackets dropped: %21" PRIu64,
+			   "\nPackets tx_dropped: %18" PRIu64,
 			   portid,
 			   port_statistics[portid].tx,
 			   port_statistics[portid].rx,
-			   port_statistics[portid].dropped);
+			   port_statistics[portid].tx_dropped);
 
-		total_packets_dropped += port_statistics[portid].dropped;
-		total_packets_tx += port_statistics[portid].tx;
-		total_packets_rx += port_statistics[portid].rx;
+		total_packets_dropped = port_statistics[portid].tx_dropped - port_statistics_period[portid].tx_dropped;
+		total_packets_tx = port_statistics[portid].tx - port_statistics_period[portid].tx;
+		total_packets_rx = port_statistics[portid].rx - port_statistics_period[portid].rx;
+
+		printf("\nPeriod statistics ==============================="
+			   "\nPackets sent speed: %18" PRIu64
+			   "\nPackets received speed: %14" PRIu64
+			   "\nPackets tx_dropped speed: %12" PRIu64,
+			   total_packets_tx / period,
+			   total_packets_rx / period,
+			   total_packets_dropped / period);
+		printf("\n====================================================\n");
+		port_statistics_period[portid].tx_dropped = port_statistics[portid].tx_dropped;
+		port_statistics_period[portid].rx = port_statistics[portid].rx;
+		port_statistics_period[portid].tx = port_statistics[portid].tx;
 	}
-	printf("\nAggregate statistics ==============================="
-		   "\nTotal packets sent: %18" PRIu64
-		   "\nTotal packets received: %14" PRIu64
-		   "\nTotal packets dropped: %15" PRIu64,
-		   total_packets_tx,
-		   total_packets_rx,
-		   total_packets_dropped);
-	printf("\n====================================================\n");
 
 	fflush(stdout);
 }
@@ -172,33 +175,11 @@ l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 }
 
 static void
-l2fwd_simple_forward(struct rte_mbuf *m, unsigned portid)
-{
-	unsigned dst_port;
-	int sent;
-	struct rte_eth_dev_tx_buffer *buffer;
-
-	dst_port = l2fwd_dst_ports[portid];
-
-	if (mac_updating)
-		l2fwd_mac_updating(m, dst_port);
-
-	buffer = tx_buffer[dst_port];
-	sent = rte_eth_tx_buffer(dst_port, 0, buffer, m);
-	if (sent)
-		port_statistics[dst_port].tx += sent;
-}
-
-static void
 l2fwd_main_lcore_show_status(void)
 {
-	int sent;
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
 	unsigned lcore_id;
-	struct rte_eth_dev_tx_buffer *buffer;
 
-	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S *
-							   BURST_TX_DRAIN_US;
 	prev_tsc = 0;
 	timer_tsc = 0;
 	lcore_id = rte_lcore_id();
@@ -211,38 +192,21 @@ l2fwd_main_lcore_show_status(void)
 	while (!force_quit)
 	{
 		cur_tsc = rte_rdtsc();
-
-		/*
-		 * TX burst queue drain
-		 */
 		diff_tsc = cur_tsc - prev_tsc;
-		if (unlikely(diff_tsc > drain_tsc))
+
+		/* advance the timer */
+		timer_tsc += diff_tsc;
+
+		/* if timer has reached its timeout */
+		if (unlikely(timer_tsc >= timer_period))
 		{
-			buffer = tx_buffer[0];
 
-			sent = rte_eth_tx_buffer_flush(0, 0, buffer);
-			if (sent)
-				port_statistics[0].tx += sent;
-
-			/* if timer is enabled */
-			if (timer_period > 0)
-			{
-
-				/* advance the timer */
-				timer_tsc += diff_tsc;
-
-				/* if timer has reached its timeout */
-				if (unlikely(timer_tsc >= timer_period))
-				{
-
-					print_stats();
-					/* reset the timer */
-					timer_tsc = 0;
-				}
-			}
-
-			prev_tsc = cur_tsc;
+			print_stats();
+			/* reset the timer */
+			timer_tsc = 0;
 		}
+
+		prev_tsc = cur_tsc;
 	}
 }
 
@@ -255,6 +219,7 @@ l2fwd_main_loop(void)
 	unsigned lcore_id;
 	unsigned i, j, portid, nb_rx;
 	struct lcore_queue_conf *qconf;
+	int sent;
 
 	lcore_id = rte_lcore_id();
 	qconf = &lcore_queue_conf[lcore_id];
@@ -294,15 +259,20 @@ l2fwd_main_loop(void)
 			portid = qconf->rx_port_list[i];
 			nb_rx = rte_eth_rx_burst(portid, 0,
 									 pkts_burst, MAX_PKT_BURST);
-
 			port_statistics[portid].rx += nb_rx;
 
 			for (j = 0; j < nb_rx; j++)
 			{
-				m = pkts_burst[j];
-				rte_prefetch0(rte_pktmbuf_mtod(m, void *));
-				l2fwd_simple_forward(m, portid);
+				l2fwd_mac_updating(pkts_burst[j], portid);
 			}
+			sent = rte_eth_tx_burst(portid, 0, pkts_burst, nb_rx);
+
+			for (j = sent; j < nb_rx; j++)
+			{
+				rte_pktmbuf_free(pkts_burst[j]);
+			}
+			port_statistics[portid].tx += sent;
+			port_statistics[portid].tx_dropped += nb_rx - sent;
 		}
 	}
 }
@@ -592,7 +562,7 @@ int main(int argc, char **argv)
 
 	nb_mbufs = RTE_MAX(nb_ports * (nb_rxd + nb_txd + MAX_PKT_BURST +
 								   nb_lcores * MEMPOOL_CACHE_SIZE),
-					   8192U);
+					   131072);
 	/* create the mbuf pool */
 	l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
 												 MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
@@ -636,7 +606,6 @@ int main(int argc, char **argv)
 
 		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
 											   &nb_txd);
-
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 					 "Cannot adjust number of descriptors: err=%d, port=%u\n",
@@ -672,24 +641,6 @@ int main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
 					 ret, portid);
 
-		/* Initialize TX buffers */
-		tx_buffer[portid] = rte_zmalloc_socket("tx_buffer",
-											   RTE_ETH_TX_BUFFER_SIZE(MAX_PKT_BURST), 0,
-											   rte_eth_dev_socket_id(portid));
-		if (tx_buffer[portid] == NULL)
-			rte_exit(EXIT_FAILURE, "Cannot allocate buffer for tx on port %u\n",
-					 portid);
-
-		rte_eth_tx_buffer_init(tx_buffer[portid], MAX_PKT_BURST);
-
-		ret = rte_eth_tx_buffer_set_err_callback(tx_buffer[portid],
-												 rte_eth_tx_buffer_count_callback,
-												 &port_statistics[portid].dropped);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-					 "Cannot set error callback for tx buffer on port %u\n",
-					 portid);
-
 		ret = rte_eth_dev_set_ptypes(portid, RTE_PTYPE_UNKNOWN, NULL,
 									 0);
 		if (ret < 0)
@@ -711,10 +662,11 @@ int main(int argc, char **argv)
 			   l2fwd_ports_eth_addr[portid].addr_bytes[3],
 			   l2fwd_ports_eth_addr[portid].addr_bytes[4],
 			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
-
-		/* initialize port stats */
-		memset(&port_statistics, 0, sizeof(port_statistics));
 	}
+
+	/* initialize port stats */
+	memset(&port_statistics, 0, sizeof(port_statistics));
+	memset(&port_statistics_period, 0, sizeof(port_statistics_period));
 
 	if (!nb_ports_available)
 	{

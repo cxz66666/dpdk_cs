@@ -41,12 +41,13 @@
 
 static volatile bool force_quit;
 
+#define OBJECT_TEST Object_512
+
 struct rte_ether_addr DST_ADDR = {{0x04, 0x3f, 0x72, 0xde, 0xba, 0x44}};
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
-#define MAX_PKT_BURST 32
-#define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
+#define MAX_PKT_BURST 256
 #define MEMPOOL_CACHE_SIZE 256
 /*
  * Configurable number of RX/TX ring descriptors
@@ -98,13 +99,14 @@ struct bandwidth_port_statistics
 {
 	uint64_t tx;
 	uint64_t rx;
-	uint64_t dropped;
+	uint64_t tx_dropped;
 } __rte_cache_aligned;
 struct bandwidth_port_statistics port_statistics[RTE_MAX_ETHPORTS];
+struct bandwidth_port_statistics port_statistics_period[RTE_MAX_ETHPORTS];
 
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* A tsc-based timer responsible for triggering statistics printout */
-static uint64_t timer_period = 1; /* default period is 10 seconds */
+static uint64_t timer_period = 1; /* default period is 1 seconds */
 
 struct Object_64
 {
@@ -112,13 +114,37 @@ struct Object_64
 	/* data */
 } __rte_cache_aligned;
 
-/* Print out statistics on packets dropped */
+struct Object_128
+{
+	uint8_t data[128];
+	/* data */
+} __rte_cache_aligned;
+
+struct Object_256
+{
+	uint8_t data[256];
+	/* data */
+} __rte_cache_aligned;
+
+struct Object_512
+{
+	uint8_t data[512];
+	/* data */
+} __rte_cache_aligned;
+
+struct Object_1024
+{
+	uint8_t data[1024];
+	/* data */
+} __rte_cache_aligned;
+
+/* Print out statistics on packets tx_dropped */
 static void
 print_stats(void)
 {
 	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
 	unsigned portid;
-
+	uint64_t period = timer_period / rte_get_timer_hz();
 	total_packets_dropped = 0;
 	total_packets_tx = 0;
 	total_packets_rx = 0;
@@ -139,24 +165,28 @@ print_stats(void)
 		printf("\nStatistics for port %u ------------------------------"
 			   "\nPackets sent: %24" PRIu64
 			   "\nPackets received: %20" PRIu64
-			   "\nPackets dropped: %21" PRIu64,
+			   "\nPackets tx_dropped: %18" PRIu64,
 			   portid,
 			   port_statistics[portid].tx,
 			   port_statistics[portid].rx,
-			   port_statistics[portid].dropped);
+			   port_statistics[portid].tx_dropped);
 
-		total_packets_dropped += port_statistics[portid].dropped;
-		total_packets_tx += port_statistics[portid].tx;
-		total_packets_rx += port_statistics[portid].rx;
+		total_packets_dropped = port_statistics[portid].tx_dropped - port_statistics_period[portid].tx_dropped;
+		total_packets_tx = port_statistics[portid].tx - port_statistics_period[portid].tx;
+		total_packets_rx = port_statistics[portid].rx - port_statistics_period[portid].rx;
+
+		printf("\nPeriod statistics ==============================="
+			   "\nPackets sent speed: %18" PRIu64
+			   "\nPackets received speed: %14" PRIu64
+			   "\nPackets tx_dropped speed: %12" PRIu64,
+			   total_packets_tx / period,
+			   total_packets_rx / period,
+			   total_packets_dropped / period);
+		printf("\n====================================================\n");
+		port_statistics_period[portid].tx_dropped = port_statistics[portid].tx_dropped;
+		port_statistics_period[portid].rx = port_statistics[portid].rx;
+		port_statistics_period[portid].tx = port_statistics[portid].tx;
 	}
-	printf("\nAggregate statistics ==============================="
-		   "\nTotal packets sent: %18" PRIu64
-		   "\nTotal packets received: %14" PRIu64
-		   "\nTotal packets dropped: %15" PRIu64,
-		   total_packets_tx,
-		   total_packets_rx,
-		   total_packets_dropped);
-	printf("\n====================================================\n");
 
 	fflush(stdout);
 }
@@ -171,8 +201,8 @@ bandwidth_send_package(void)
 	{
 		struct rte_mbuf *pkt[MAX_PKT_BURST];
 		struct rte_ether_hdr *eth_hdr;
-		struct Object_64 *msg;
-		struct Object_64 object_64;
+		struct OBJECT_TEST *msg;
+		struct OBJECT_TEST object_test;
 
 		while (!force_quit)
 		{
@@ -185,16 +215,16 @@ bandwidth_send_package(void)
 				eth_hdr->d_addr = DST_ADDR;
 				eth_hdr->s_addr = l2fwd_ports_eth_addr[0];
 				eth_hdr->ether_type = 0x0a00;
-				msg = (struct Object_64 *)(rte_pktmbuf_mtod(pkt[i], char *) + sizeof(struct rte_ether_hdr));
-				memcpy(msg, &object_64, sizeof(object_64));
+				msg = (struct OBJECT_TEST *)(rte_pktmbuf_mtod(pkt[i], char *) + sizeof(struct rte_ether_hdr));
+				memcpy(msg, &object_test, sizeof(object_test));
 
-				int pkt_size = sizeof(struct Object_64) + sizeof(struct rte_ether_hdr);
+				int pkt_size = sizeof(struct OBJECT_TEST) + sizeof(struct rte_ether_hdr);
 				pkt[i]->data_len = pkt_size;
 				pkt[i]->pkt_len = pkt_size;
 			}
 			uint16_t nb_tx = rte_eth_tx_burst(0, 0, pkt, MAX_PKT_BURST);
 			port_statistics[0].tx += nb_tx;
-			port_statistics[0].dropped += MAX_PKT_BURST - nb_tx;
+			port_statistics[0].tx_dropped += MAX_PKT_BURST - nb_tx;
 			for (int i = 0; i < MAX_PKT_BURST; i++)
 			{
 				rte_pktmbuf_free(pkt[i]);
@@ -213,8 +243,6 @@ l2fwd_main_lcore_show_status(void)
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
 	unsigned lcore_id;
 
-	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S *
-							   BURST_TX_DRAIN_US;
 	prev_tsc = 0;
 	timer_tsc = 0;
 	lcore_id = rte_lcore_id();
@@ -232,27 +260,24 @@ l2fwd_main_lcore_show_status(void)
 		 * TX burst queue drain
 		 */
 		diff_tsc = cur_tsc - prev_tsc;
-		if (unlikely(diff_tsc > drain_tsc))
+		/* if timer is enabled */
+		if (timer_period > 0)
 		{
-			/* if timer is enabled */
-			if (timer_period > 0)
+
+			/* advance the timer */
+			timer_tsc += diff_tsc;
+
+			/* if timer has reached its timeout */
+			if (unlikely(timer_tsc >= timer_period))
 			{
 
-				/* advance the timer */
-				timer_tsc += diff_tsc;
-
-				/* if timer has reached its timeout */
-				if (unlikely(timer_tsc >= timer_period))
-				{
-
-					print_stats();
-					/* reset the timer */
-					timer_tsc = 0;
-				}
+				print_stats();
+				/* reset the timer */
+				timer_tsc = 0;
 			}
-
-			prev_tsc = cur_tsc;
 		}
+
+		prev_tsc = cur_tsc;
 	}
 }
 
@@ -567,7 +592,7 @@ int main(int argc, char **argv)
 
 	nb_mbufs = RTE_MAX(nb_ports * (nb_rxd + nb_txd + MAX_PKT_BURST +
 								   nb_lcores * MEMPOOL_CACHE_SIZE),
-					   8192U);
+					   131072);
 	/* create the mbuf pool */
 	bandwidth_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
 													 MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
@@ -670,8 +695,9 @@ int main(int argc, char **argv)
 			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
 
 		/* initialize port stats */
-		memset(&port_statistics, 0, sizeof(port_statistics));
 	}
+	memset(&port_statistics, 0, sizeof(port_statistics));
+	memset(&port_statistics_period, 0, sizeof(port_statistics_period));
 
 	if (!nb_ports_available)
 	{
