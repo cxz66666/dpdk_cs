@@ -35,6 +35,7 @@ static struct rte_eth_conf port_conf = {
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
+		.offloads = DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM,
 	},
 };
 
@@ -175,9 +176,11 @@ bandwidth_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 	unsigned i, j, queueid;
 	struct rte_mbuf *pkt[MAX_PKT_BURST];
 	struct rte_ether_hdr *eth_hdr;
+	struct rte_ipv4_hdr *ip_hdr;
+	struct rte_udp_hdr *udp_hdr;
 	struct OBJECT_TEST *msg;
 	struct OBJECT_TEST object_test;
-
+	rte_be16_t package_id = 0;
 	while (!force_quit)
 	{
 		for (i = 0; i < qconf->n_tx_queue; i++)
@@ -186,15 +189,38 @@ bandwidth_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 			for (j = 0; j < MAX_PKT_BURST; j++)
 			{
 				pkt[j] = rte_pktmbuf_alloc(bandwidth_pktmbuf_pool);
+				pkt[j]->l2_len = sizeof(struct rte_ether_hdr);
+				pkt[j]->l3_len = sizeof(struct rte_ipv4_hdr);
+				pkt[j]->l4_len = sizeof(struct rte_udp_hdr);
+				pkt[j]->ol_flags |= PKT_TX_IPV4 | PKT_TX_IP_CKSUM | PKT_TX_UDP_CKSUM;
 
 				eth_hdr = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
 				eth_hdr->d_addr = DST_ADDR;
 				eth_hdr->s_addr = l2fwd_ports_eth_addr[portid];
 				eth_hdr->ether_type = 0x0a00;
-				msg = (struct OBJECT_TEST *)(rte_pktmbuf_mtod(pkt[j], char *) + sizeof(struct rte_ether_hdr));
+
+				ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+				ip_hdr->version_ihl = 0x45;
+				ip_hdr->type_of_service = 0;
+				ip_hdr->total_length = sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ether_hdr);
+				ip_hdr->packet_id = package_id++;
+				ip_hdr->fragment_offset = 0;
+				ip_hdr->time_to_live = 64;
+				ip_hdr->next_proto_id = IPPROTO_UDP;
+				ip_hdr->src_addr = 0x01010101;
+				ip_hdr->dst_addr = 0x02010100 + queueid;
+
+				udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
+				udp_hdr->dgram_len = sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr);
+				udp_hdr->src_port = 1010;
+				udp_hdr->dst_port = queueid;
+				udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[j]->ol_flags);
+				ip_hdr->hdr_checksum = 0;
+
+				msg = (struct OBJECT_TEST *)(udp_hdr + 1);
 				memcpy(msg, &object_test, sizeof(object_test));
 
-				int pkt_size = sizeof(struct OBJECT_TEST) + sizeof(struct rte_ether_hdr);
+				int pkt_size = sizeof(struct OBJECT_TEST) + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
 				pkt[j]->data_len = pkt_size;
 				pkt[j]->pkt_len = pkt_size;
 			}

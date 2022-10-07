@@ -41,8 +41,8 @@
 #define RTE_TEST_RX_DESC_DEFAULT 16384
 #define RTE_TEST_TX_DESC_DEFAULT 16384
 
-#define RX_QUEUE 1
-#define TX_QUEUE 1
+#define RX_QUEUE 4
+#define TX_QUEUE 4
 
 #define MAX_QUEUE_PER_LCORE 1
 
