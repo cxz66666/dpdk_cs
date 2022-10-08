@@ -6,7 +6,7 @@
 
 static volatile bool force_quit;
 
-#define OBJECT_TEST Object_512
+#define OBJECT_TEST Object_256
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
@@ -31,7 +31,17 @@ struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
+		.mq_mode = ETH_MQ_RX_RSS,
 		.split_hdr_size = 0,
+		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
+		.offloads = DEV_RX_OFFLOAD_RSS_HASH | DEV_RX_OFFLOAD_CHECKSUM,
+	},
+	.rx_adv_conf = {
+		.rss_conf = {
+			.rss_key = rss_key,
+			.rss_key_len = 40,
+			.rss_hf = ETH_RSS_IP | ETH_RSS_TCP | ETH_RSS_UDP,
+		},
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -197,23 +207,23 @@ bandwidth_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 				eth_hdr = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
 				eth_hdr->d_addr = DST_ADDR;
 				eth_hdr->s_addr = l2fwd_ports_eth_addr[portid];
-				eth_hdr->ether_type = 0x0a00;
+				eth_hdr->ether_type = RTE_BE16(0x0800);
 
 				ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
 				ip_hdr->version_ihl = 0x45;
 				ip_hdr->type_of_service = 0;
-				ip_hdr->total_length = sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ether_hdr);
-				ip_hdr->packet_id = package_id++;
-				ip_hdr->fragment_offset = 0;
+				ip_hdr->total_length = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ether_hdr));
+				ip_hdr->packet_id = RTE_BE16(package_id++);
+				ip_hdr->fragment_offset = RTE_BE16(0);
 				ip_hdr->time_to_live = 64;
 				ip_hdr->next_proto_id = IPPROTO_UDP;
-				ip_hdr->src_addr = 0x01010101;
-				ip_hdr->dst_addr = 0x02010100 + queueid;
+				ip_hdr->src_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
+				ip_hdr->dst_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
 
 				udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
-				udp_hdr->dgram_len = sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr);
-				udp_hdr->src_port = 1010;
-				udp_hdr->dst_port = queueid;
+				udp_hdr->dgram_len = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr));
+				udp_hdr->src_port = RTE_BE16(rte_rand_max(UINT16_MAX));
+				udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
 				udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[j]->ol_flags);
 				ip_hdr->hdr_checksum = 0;
 

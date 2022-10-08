@@ -39,6 +39,8 @@
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
 
+// #include "flow_blocks.h"
+
 static volatile bool force_quit;
 
 /* MAC updating enabled by default */
@@ -46,7 +48,7 @@ static int mac_updating = 1;
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
-#define MAX_PKT_BURST 4096
+#define MAX_PKT_BURST 8192
 #define MEMPOOL_CACHE_SIZE 512
 
 /*
@@ -56,6 +58,12 @@ static int mac_updating = 1;
 #define RTE_TEST_TX_DESC_DEFAULT 16384
 static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+
+static uint8_t rss_key[40] = {0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
+							  0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3, 0x8f, 0xb0,
+							  0xd0, 0xca, 0x2b, 0xcb, 0xae, 0x7b, 0x30, 0xb4,
+							  0x77, 0xcb, 0x2d, 0xa3, 0x80, 0x30, 0xf2, 0x0c,
+							  0x6a, 0x42, 0xb7, 0x3b, 0xbe, 0xac, 0x01, 0xfa};
 
 /* ethernet addresses of ports */
 static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -78,11 +86,13 @@ static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode = ETH_MQ_RX_RSS,
 		.split_hdr_size = 0,
-		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
+		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
+		.offloads = DEV_RX_OFFLOAD_RSS_HASH | DEV_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
-			.rss_key = NULL,
+			.rss_key = rss_key,
+			.rss_key_len = 40,
 			.rss_hf = ETH_RSS_IP | ETH_RSS_TCP | ETH_RSS_UDP,
 		},
 	},
@@ -91,7 +101,7 @@ static struct rte_eth_conf port_conf = {
 	},
 };
 
-struct rte_mempool *l2fwd_pktmbuf_pool = NULL;
+struct rte_mempool *l2fwd_pktmbuf_pool[TX_RX_QUEUE];
 
 /* Per-port statistics struct */
 struct l2fwd_port_statistics
@@ -102,6 +112,12 @@ struct l2fwd_port_statistics
 } __rte_cache_aligned;
 struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 struct l2fwd_port_statistics port_statistics_period[RTE_MAX_ETHPORTS];
+
+// struct rte_flow *flow[TX_RX_QUEUE];
+// uint32_t dst_ip_mask[TX_RX_QUEUE] = {0, 1, 2, 3};
+// #define DST_IP_MASK 0x3
+// #define FULL_MASK 0xffffffff /* full mask */
+// #define EMPTY_MASK 0x0		 /* empty mask */
 
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* A tsc-based timer responsible for triggering statistics printout */
@@ -392,6 +408,8 @@ int main(int argc, char **argv)
 	unsigned int nb_lcores = 0;
 	unsigned int nb_mbufs;
 	int tx_rx_queue_count = 0;
+	struct rte_flow_error error;
+
 	/* init EAL */
 	ret = rte_eal_init(argc, argv);
 	if (ret < 0)
@@ -461,18 +479,22 @@ int main(int argc, char **argv)
 								   nb_lcores * MEMPOOL_CACHE_SIZE),
 					   131072);
 	/* create the mbuf pool */
-	l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
-												 MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
-												 rte_socket_id());
-	if (l2fwd_pktmbuf_pool == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
+	for (int i = 0; i < TX_RX_QUEUE; i++)
+	{
+		char name[50];
+		sprintf(name, "mbuf_pool_%d", i);
+		l2fwd_pktmbuf_pool[i] = rte_pktmbuf_pool_create(name, nb_mbufs,
+														MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+														rte_socket_id());
+		if (l2fwd_pktmbuf_pool[i] == NULL)
+			rte_exit(EXIT_FAILURE, "Cannot init mbuf pool %d\n", i);
+	}
 
 	/* Initialise each port */
 	RTE_ETH_FOREACH_DEV(portid)
 	{
 		struct rte_eth_rxconf rxq_conf;
 		struct rte_eth_txconf txq_conf;
-		struct rte_eth_conf local_port_conf = port_conf;
 		struct rte_eth_dev_info dev_info;
 		uint64_t rss_hf_tmp;
 
@@ -495,20 +517,20 @@ int main(int argc, char **argv)
 					 portid, strerror(-ret));
 
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
-			local_port_conf.txmode.offloads |=
+			port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 
-		rss_hf_tmp = local_port_conf.rx_adv_conf.rss_conf.rss_hf;
-		local_port_conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
-		if (local_port_conf.rx_adv_conf.rss_conf.rss_hf != rss_hf_tmp)
+		rss_hf_tmp = port_conf.rx_adv_conf.rss_conf.rss_hf;
+		port_conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
+		if (port_conf.rx_adv_conf.rss_conf.rss_hf != rss_hf_tmp)
 		{
 			printf("Port %u modified RSS hash function based on hardware support,"
 				   "requested:%#" PRIx64 " configured:%#" PRIx64 "\n",
 				   portid,
 				   rss_hf_tmp,
-				   local_port_conf.rx_adv_conf.rss_conf.rss_hf);
+				   port_conf.rx_adv_conf.rss_conf.rss_hf);
 		}
-		ret = rte_eth_dev_configure(portid, TX_RX_QUEUE, TX_RX_QUEUE, &local_port_conf);
+		ret = rte_eth_dev_configure(portid, TX_RX_QUEUE, TX_RX_QUEUE, &port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 					 ret, portid);
@@ -530,13 +552,13 @@ int main(int argc, char **argv)
 		/* init RX queue */
 		fflush(stdout);
 		rxq_conf = dev_info.default_rxconf;
-		rxq_conf.offloads = local_port_conf.rxmode.offloads;
+		rxq_conf.offloads = port_conf.rxmode.offloads;
 		for (int i = 0; i < TX_RX_QUEUE; i++)
 		{
 			ret = rte_eth_rx_queue_setup(portid, i, nb_rxd,
 										 rte_eth_dev_socket_id(portid),
 										 &rxq_conf,
-										 l2fwd_pktmbuf_pool);
+										 l2fwd_pktmbuf_pool[i]);
 			if (ret < 0)
 				rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup:err=%d, port=%u\n",
 						 ret, portid);
@@ -545,7 +567,7 @@ int main(int argc, char **argv)
 		/* init TX queue */
 		fflush(stdout);
 		txq_conf = dev_info.default_txconf;
-		txq_conf.offloads = local_port_conf.txmode.offloads;
+		txq_conf.offloads = port_conf.txmode.offloads;
 		for (int i = 0; i < TX_RX_QUEUE; i++)
 		{
 			ret = rte_eth_tx_queue_setup(portid, i, nb_rxd,
@@ -561,6 +583,7 @@ int main(int argc, char **argv)
 		if (ret < 0)
 			printf("Port %u, Failed to disable Ptype parsing\n",
 				   portid);
+
 		/* Start device */
 		ret = rte_eth_dev_start(portid);
 		if (ret < 0)
@@ -577,6 +600,19 @@ int main(int argc, char **argv)
 			   l2fwd_ports_eth_addr[portid].addr_bytes[3],
 			   l2fwd_ports_eth_addr[portid].addr_bytes[4],
 			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
+		// for (int i = 0; i < TX_RX_QUEUE; i++)
+		// {
+		// 	flow[i] = generate_ipv4_flow(portid, i,
+		// 								 dst_ip_mask[i], FULL_MASK,
+		// 								 dst_ip_mask[i], FULL_MASK, &error);
+		// 	if (!flow[i])
+		// 	{
+		// 		printf("Flow can't be created %d message: %s\n",
+		// 			   error.type,
+		// 			   error.message ? error.message : "(no stated reason)");
+		// 		rte_exit(EXIT_FAILURE, "error in creating flow");
+		// 	}
+		// }
 	}
 
 	/* initialize port stats */
