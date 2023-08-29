@@ -71,7 +71,7 @@ static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
 /* mask of enabled ports */
 static uint32_t l2fwd_enabled_port_mask = 1;
 
-#define TX_RX_QUEUE 4
+#define TX_RX_QUEUE 1
 
 #define MAX_QUEUE_PER_LCORE 1
 
@@ -150,7 +150,7 @@ print_stats(void)
 		period_packets_rx = 0;
 		/* skip disabled ports */
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
-			continue;
+			break;
 		printf("\nStatistics for port %u ------------------------------", portid);
 		for (queueid = 0; queueid < TX_RX_QUEUE; queueid++)
 		{
@@ -540,7 +540,13 @@ int main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE,
 					 "Cannot adjust number of descriptors: err=%d, port=%u\n",
 					 ret, portid);
-
+		
+		ret = rte_eth_promiscuous_enable(port);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+					 "Can't set promiscuous: err=%d, port=%u\n",
+					 ret, portid);
+					 
 		ret = rte_eth_macaddr_get(portid,
 								  &l2fwd_ports_eth_addr[portid]);
 		if (ret < 0)
