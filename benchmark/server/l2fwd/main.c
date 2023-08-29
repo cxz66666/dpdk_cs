@@ -84,20 +84,19 @@ struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
-		.mq_mode = ETH_MQ_RX_RSS,
-		.split_hdr_size = 0,
-		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
-		.offloads = DEV_RX_OFFLOAD_RSS_HASH | DEV_RX_OFFLOAD_CHECKSUM,
+		.mq_mode = RTE_ETH_MQ_RX_RSS,
+		.mtu = RTE_ETHER_MTU,
+		.offloads = RTE_ETH_RX_OFFLOAD_RSS_HASH | RTE_ETH_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
 			.rss_key = rss_key,
 			.rss_key_len = 40,
-			.rss_hf = ETH_RSS_IP | ETH_RSS_TCP | ETH_RSS_UDP,
+			.rss_hf = RTE_ETH_RSS_IP | RTE_ETH_RSS_TCP | RTE_ETH_RSS_UDP,
 		},
 	},
 	.txmode = {
-		.mq_mode = ETH_MQ_TX_NONE,
+		.mq_mode = RTE_ETH_MQ_TX_NONE,
 	},
 };
 
@@ -203,8 +202,8 @@ l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 
 	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-	eth->d_addr = eth->s_addr;
-	eth->s_addr = l2fwd_ports_eth_addr[dest_portid];
+	eth->src_addr = eth->dst_addr;
+	eth->src_addr = l2fwd_ports_eth_addr[dest_portid];
 }
 
 static void
@@ -359,7 +358,7 @@ check_all_ports_link_status(uint32_t port_mask)
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
-			if (link.link_status == ETH_LINK_DOWN)
+			if (link.link_status == RTE_ETH_LINK_DOWN)
 			{
 				all_ports_up = 0;
 				break;
@@ -516,9 +515,9 @@ int main(int argc, char **argv)
 					 "Error during getting device (port %u) info: %s\n",
 					 portid, strerror(-ret));
 
-		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 			port_conf.txmode.offloads |=
-				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
 		rss_hf_tmp = port_conf.rx_adv_conf.rss_conf.rss_hf;
 		port_conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
