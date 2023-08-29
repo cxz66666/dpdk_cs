@@ -540,13 +540,13 @@ int main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE,
 					 "Cannot adjust number of descriptors: err=%d, port=%u\n",
 					 ret, portid);
-		
-		ret = rte_eth_promiscuous_enable(port);
+
+		ret = rte_eth_promiscuous_enable(portid);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 					 "Can't set promiscuous: err=%d, port=%u\n",
 					 ret, portid);
-					 
+
 		ret = rte_eth_macaddr_get(portid,
 								  &l2fwd_ports_eth_addr[portid]);
 		if (ret < 0)
