@@ -48,14 +48,14 @@ static int mac_updating = 1;
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
-#define MAX_PKT_BURST 8192
+#define MAX_PKT_BURST 1024
 #define MEMPOOL_CACHE_SIZE 512
 
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 16384
-#define RTE_TEST_TX_DESC_DEFAULT 16384
+#define RTE_TEST_RX_DESC_DEFAULT 4096
+#define RTE_TEST_TX_DESC_DEFAULT 4096
 static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
@@ -202,7 +202,7 @@ l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 
 	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-	eth->src_addr = eth->dst_addr;
+	eth->dst_addr = eth->src_addr;
 	eth->src_addr = l2fwd_ports_eth_addr[dest_portid];
 }
 
