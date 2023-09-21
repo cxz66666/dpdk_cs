@@ -38,8 +38,8 @@
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
 
-#define RTE_TEST_RX_DESC_DEFAULT 16384
-#define RTE_TEST_TX_DESC_DEFAULT 16384
+#define RTE_TEST_RX_DESC_DEFAULT 8192
+#define RTE_TEST_TX_DESC_DEFAULT 8192
 
 #define RX_QUEUE 1
 #define TX_QUEUE 1
@@ -51,7 +51,11 @@
 
 #define MEMPOOL_CACHE_SIZE 256
 
-struct rte_ether_addr DST_ADDR = {{0xe8, 0xeb, 0xd3, 0xd6, 0x32, 0x40}};
+// bf2 mac addr
+struct rte_ether_addr DST_ADDR = {{0x02, 0xe3, 0xc3, 0xe8, 0xba, 0x3c}};
+
+// host2 mac addr
+// struct rte_ether_addr DST_ADDR = {{0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xde}};
 
 static uint8_t rss_key[40] = {0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
                               0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3, 0x8f, 0xb0,

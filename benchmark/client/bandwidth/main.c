@@ -6,7 +6,7 @@
 
 static volatile bool force_quit;
 
-#define OBJECT_TEST Object_256
+#define OBJECT_TEST Object_1024
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
@@ -216,17 +216,17 @@ bandwidth_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 				ip_hdr->fragment_offset = RTE_BE16(0);
 				ip_hdr->time_to_live = 64;
 				ip_hdr->next_proto_id = IPPROTO_UDP;
-				// ip_hdr->src_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
-				// ip_hdr->dst_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
-				ip_hdr->src_addr = RTE_BE16(1);
-				ip_hdr->dst_addr = RTE_BE16(1);
+				ip_hdr->src_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
+				ip_hdr->dst_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
+				// ip_hdr->src_addr = RTE_BE16(1);
+				// ip_hdr->dst_addr = RTE_BE16(1);
 
 				udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
 				udp_hdr->dgram_len = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr));
-				// udp_hdr->src_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-				// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-				udp_hdr->src_port = RTE_BE16(1);
-				udp_hdr->dst_port = RTE_BE16(1);
+				udp_hdr->src_port = RTE_BE16(rte_rand_max(UINT16_MAX));
+				udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
+				// udp_hdr->src_port = RTE_BE16(1);
+				// udp_hdr->dst_port = RTE_BE16(1);
 				udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[j]->ol_flags);
 				ip_hdr->hdr_checksum = 0;
 
