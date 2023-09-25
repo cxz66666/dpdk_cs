@@ -11,7 +11,7 @@ static volatile bool force_quit;
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
 #define SEND_PKT_BURST 1
-#define RECV_PKT_BURST 128
+#define RECV_PKT_BURST 8
 /*
  * Configurable number of RX/TX ring descriptors
  */
