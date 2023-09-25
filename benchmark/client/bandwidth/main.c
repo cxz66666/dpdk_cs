@@ -244,7 +244,7 @@ bandwidth_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 			{
 				rte_pktmbuf_free(pkt[j]);
 			}
-			sleep(1);
+			// sleep(1);
 		}
 	}
 }
