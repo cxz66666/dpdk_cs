@@ -72,11 +72,27 @@ struct lcore_queue_conf
     unsigned tx_queue_list[MAX_QUEUE_PER_LCORE];
 } __rte_cache_aligned;
 
+struct Object_0 {
+    uint8_t data[0];
+};
+
+struct Object_8
+{
+    uint8_t data[8];
+    /* data */
+};
+
+struct Object_16
+{
+    uint8_t data[16];
+    /* data */
+};
+
 struct Object_32
 {
     uint8_t data[32];
     /* data */
-} __rte_cache_aligned;
+};
 
 struct Object_64
 {
