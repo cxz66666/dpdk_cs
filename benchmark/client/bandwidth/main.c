@@ -31,20 +31,21 @@ struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
-		.mq_mode = RTE_ETH_MQ_RX_RSS,
-		.mtu = RTE_ETHER_MTU,
-		.offloads = RTE_ETH_RX_OFFLOAD_RSS_HASH | RTE_ETH_RX_OFFLOAD_CHECKSUM,
+		.mq_mode = ETH_MQ_RX_RSS,
+		.split_hdr_size = 0,
+		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
+		.offloads = DEV_RX_OFFLOAD_RSS_HASH | DEV_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
 			.rss_key = rss_key,
 			.rss_key_len = 40,
-			.rss_hf = RTE_ETH_RSS_IP | RTE_ETH_RSS_TCP | RTE_ETH_RSS_UDP,
+			.rss_hf = ETH_RSS_IP | ETH_RSS_TCP | ETH_RSS_UDP,
 		},
 	},
 	.txmode = {
-		.mq_mode = RTE_ETH_MQ_TX_NONE,
-		.offloads = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
+		.mq_mode = ETH_MQ_TX_NONE,
+		.offloads = DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM,
 	},
 };
 
@@ -201,11 +202,11 @@ bandwidth_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 				pkt[j]->l2_len = sizeof(struct rte_ether_hdr);
 				pkt[j]->l3_len = sizeof(struct rte_ipv4_hdr);
 				pkt[j]->l4_len = sizeof(struct rte_udp_hdr);
-				pkt[j]->ol_flags |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
+				pkt[j]->ol_flags |= PKT_TX_IPV4 | PKT_TX_IP_CKSUM | PKT_TX_UDP_CKSUM;
 
 				eth_hdr = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
-				eth_hdr->dst_addr = DST_ADDR;
-				eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
+				eth_hdr->d_addr = DST_ADDR;
+				eth_hdr->s_addr = l2fwd_ports_eth_addr[portid];
 				eth_hdr->ether_type = RTE_BE16(0x0800);
 
 				ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
@@ -366,7 +367,7 @@ check_all_ports_link_status(uint32_t port_mask)
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
-			if (link.link_status == RTE_ETH_LINK_DOWN)
+			if (link.link_status == ETH_LINK_DOWN)
 			{
 				all_ports_up = 0;
 				break;
@@ -531,9 +532,9 @@ int main(int argc, char **argv)
 					 "Error during getting device (port %u) info: %s\n",
 					 portid, strerror(-ret));
 
-		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
+		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
-				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 		ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue, &local_port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",

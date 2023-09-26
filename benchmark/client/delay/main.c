@@ -31,7 +31,7 @@ struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 static struct rte_eth_conf port_conf = {
 	.rxmode = {},
 	.txmode = {
-		.mq_mode = RTE_ETH_MQ_TX_NONE,
+		.mq_mode = ETH_MQ_TX_NONE,
 	},
 };
 
@@ -65,7 +65,8 @@ add_timestamps(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
 {
 	unsigned i;
 	uint64_t now = rte_rdtsc_precise();
-	for (i = 0; i < nb_pkts; i++) {
+	for (i = 0; i < nb_pkts; i++)
+	{
 		// printf("%ld\n", *tsc_field(pkts[i]));
 		*tsc_field(pkts[i]) = now;
 	}
@@ -215,10 +216,9 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 				pkt[j] = rte_pktmbuf_alloc(delay_pktmbuf_pool);
 
 				eth_hdr = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
-				eth_hdr->dst_addr = DST_ADDR;
-				eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
+				eth_hdr->d_addr = DST_ADDR;
+				eth_hdr->s_addr = l2fwd_ports_eth_addr[portid];
 				eth_hdr->ether_type = RTE_BE16(0x0800);
-
 
 				msg = (struct OBJECT_TEST *)(eth_hdr + 1);
 				memcpy(msg, &object_test, sizeof(object_test));
@@ -371,7 +371,7 @@ check_all_ports_link_status(uint32_t port_mask)
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
-			if (link.link_status == RTE_ETH_LINK_DOWN)
+			if (link.link_status == ETH_LINK_DOWN)
 			{
 				all_ports_up = 0;
 				break;
@@ -536,9 +536,9 @@ int main(int argc, char **argv)
 					 "Error during getting device (port %u) info: %s\n",
 					 portid, strerror(-ret));
 
-		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
+		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
-				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 		ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue, &local_port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
