@@ -15,6 +15,7 @@
 #include <getopt.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <time.h>
 
 #include <rte_common.h>
 #include <rte_log.h>
@@ -52,6 +53,9 @@
 #define MEMPOOL_CACHE_SIZE 256
 
 // bf2 mac addr
+// struct rte_ether_addr DST_ADDR = {{0x02, 0xe3, 0xc3, 0xe8, 0xba, 0x3c}};
+
+// bf2 p0 mac addr
 struct rte_ether_addr DST_ADDR = {{0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xee}};
 
 // host2 mac addr
@@ -72,7 +76,8 @@ struct lcore_queue_conf
     unsigned tx_queue_list[MAX_QUEUE_PER_LCORE];
 } __rte_cache_aligned;
 
-struct Object_0 {
+struct Object_0
+{
     uint8_t data[0];
 };
 
