@@ -6,7 +6,7 @@
 
 static volatile bool force_quit;
 
-#define OBJECT_TEST Object_32
+#define OBJECT_TEST Object_16
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
@@ -29,9 +29,12 @@ static uint32_t l2fwd_enabled_port_mask = 1;
 struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
 static struct rte_eth_conf port_conf = {
-	.rxmode = {},
+	.rxmode = {
+		.mtu = RTE_ETHER_MTU,
+	},
 	.txmode = {
 		.mq_mode = RTE_ETH_MQ_TX_NONE,
+		// .offloads = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
 	},
 };
 
@@ -51,12 +54,10 @@ struct delay_port_statistics port_statistics_period[RTE_MAX_ETHPORTS];
 /* A tsc-based timer responsible for triggering statistics printout */
 static uint64_t timer_period = 1; /* default period is 1 seconds */
 
-static uint64_t magic_num = 0x12345678;
-
 static inline struct timespec *
 tsc_field(struct rte_mbuf *mbuf)
 {
-	return rte_pktmbuf_mtod_offset(mbuf, struct timespec *, sizeof(struct rte_ether_hdr));
+	return rte_pktmbuf_mtod_offset(mbuf, struct timespec *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr));
 }
 
 static uint16_t
@@ -209,13 +210,14 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 	unsigned i, j, queueid, total_send;
 	struct rte_mbuf *pkt[SEND_PKT_BURST];
 	struct rte_ether_hdr *eth_hdr;
-	// struct rte_ipv4_hdr *ip_hdr;
-	// struct rte_udp_hdr *udp_hdr;
+	struct rte_ipv4_hdr *ip_hdr;
+	struct rte_udp_hdr *udp_hdr;
+	rte_be16_t package_id = 0;
+
 	struct OBJECT_TEST *msg;
 	struct OBJECT_TEST object_test;
-	// rte_be16_t package_id = 0;
-	uint64_t *object_magic_ptr = (uint64_t *)(object_test.data + sizeof(struct timespec));
-	*object_magic_ptr = magic_num;
+	int pkt_size = sizeof(struct OBJECT_TEST) + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
+
 	while (!force_quit)
 	{
 		total_send = 0;
@@ -225,15 +227,42 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 			for (j = 0; j < SEND_PKT_BURST; j++)
 			{
 				pkt[j] = rte_pktmbuf_alloc(delay_pktmbuf_pool);
+				pkt[j]->l2_len = sizeof(struct rte_ether_hdr);
+				pkt[j]->l3_len = sizeof(struct rte_ipv4_hdr);
+				pkt[j]->l4_len = sizeof(struct rte_udp_hdr);
+				pkt[j]->ol_flags |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
 
 				eth_hdr = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
 				eth_hdr->dst_addr = DST_ADDR;
 				eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
 				eth_hdr->ether_type = RTE_BE16(0x0800);
 
-				msg = (struct OBJECT_TEST *)(eth_hdr + 1);
+				ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+				ip_hdr->version_ihl = 0x45;
+				ip_hdr->type_of_service = 0;
+				ip_hdr->total_length = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ipv4_hdr));
+				ip_hdr->packet_id = RTE_BE16(package_id++);
+				ip_hdr->fragment_offset = RTE_BE16(0);
+				ip_hdr->time_to_live = 64;
+				ip_hdr->next_proto_id = IPPROTO_UDP;
+				ip_hdr->src_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
+				ip_hdr->dst_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
+
+				// ip_hdr->src_addr = RTE_BE16(1);
+				// ip_hdr->dst_addr = RTE_BE16(1);
+
+				udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
+				udp_hdr->dgram_len = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr));
+				udp_hdr->src_port = RTE_BE16(rte_rand_max(UINT16_MAX));
+				udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
+				// udp_hdr->src_port = RTE_BE16(1);
+				// udp_hdr->dst_port = RTE_BE16(1);
+				udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[j]->ol_flags);
+				ip_hdr->hdr_checksum = 0;
+
+				msg = (struct OBJECT_TEST *)(udp_hdr + 1);
 				memcpy(msg, &object_test, sizeof(object_test));
-				int pkt_size = sizeof(struct OBJECT_TEST) + sizeof(struct rte_ether_hdr);
+
 				pkt[j]->data_len = pkt_size;
 				pkt[j]->pkt_len = pkt_size;
 			}
@@ -258,7 +287,7 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 
 				for (j = 0; j < nb_rx; j++)
 				{
-					if (*(uint64_t *)(tsc_field(pkt[j]) + 1) == magic_num)
+					if (rte_pktmbuf_pkt_len(pkt[j]) == RTE_MAX(60, pkt_size))
 					{
 						port_statistics[portid].rx[queueid]++;
 						total_send--;
