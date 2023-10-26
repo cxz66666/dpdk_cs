@@ -446,9 +446,16 @@ int main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE,
 					 "Cannot get MAC address: err=%d, port=%u\n",
 					 ret, portid);
+		char name_buf[RTE_ETH_NAME_MAX_LEN];
+		ret = rte_eth_dev_get_name_by_port(portid,
+										   name_buf);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+					 "Cannot get port name: err=%d, port=%u\n",
+					 ret, portid);
 
-		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
-			   portid,
+		printf("Port %u %s, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
+			   portid, name_buf,
 			   l2fwd_ports_eth_addr[portid].addr_bytes[0],
 			   l2fwd_ports_eth_addr[portid].addr_bytes[1],
 			   l2fwd_ports_eth_addr[portid].addr_bytes[2],
