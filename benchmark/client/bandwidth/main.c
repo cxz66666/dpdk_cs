@@ -6,7 +6,7 @@
 
 static volatile bool force_quit;
 
-#define OBJECT_TEST Object_1024
+#define OBJECT_TEST Object_1k
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
@@ -15,11 +15,11 @@ static volatile bool force_quit;
  * Configurable number of RX/TX ring descriptors
  */
 
-static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
-
-#define nb_rx_queue RX_QUEUE
-#define nb_tx_queue TX_QUEUE
+static uint16_t nb_rxd = 1024;
+static uint16_t nb_txd = 1024;
+static uint32_t NUM_MBUFS = 1024 * 8;
+#define nb_rx_queue 1
+#define nb_tx_queue 1
 
 /* ethernet addresses of ports */
 static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -216,8 +216,8 @@ bandwidth_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 				ip_hdr->fragment_offset = RTE_BE16(0);
 				ip_hdr->time_to_live = 64;
 				ip_hdr->next_proto_id = IPPROTO_UDP;
-				ip_hdr->src_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
-				ip_hdr->dst_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
+				ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+				ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 				// ip_hdr->src_addr = RTE_BE16(1);
 				// ip_hdr->dst_addr = RTE_BE16(1);
 
@@ -240,37 +240,19 @@ bandwidth_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 			uint16_t nb_tx = rte_eth_tx_burst(portid, queueid, pkt, MAX_PKT_BURST);
 			port_statistics[portid].tx[queueid] += nb_tx;
 			port_statistics[portid].tx_dropped[queueid] += MAX_PKT_BURST - nb_tx;
-			for (j = 0; j < MAX_PKT_BURST; j++)
+			for (j = nb_tx; j < MAX_PKT_BURST; j++)
 			{
 				rte_pktmbuf_free(pkt[j]);
 			}
-			// sleep(1);
-		}
-	}
-}
 
-static void bandwidth_receive_package(unsigned portid, struct lcore_queue_conf *qconf)
-{
-	unsigned i, j, queueid, nb_rx;
-	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
-
-	while (!force_quit)
-	{
-		/*
-		 * Read packet from RX queues
-		 */
-		for (i = 0; i < qconf->n_rx_queue; i++)
-		{
-
-			queueid = qconf->rx_queue_list[i];
-			nb_rx = rte_eth_rx_burst(portid, queueid,
-									 pkts_burst, MAX_PKT_BURST);
+			uint16_t nb_rx = rte_eth_rx_burst(portid, queueid,
+											  pkt, MAX_PKT_BURST);
 
 			port_statistics[portid].rx[queueid] += nb_rx;
 
 			for (j = 0; j < nb_rx; j++)
 			{
-				rte_pktmbuf_free(pkts_burst[j]);
+				rte_pktmbuf_free(pkt[j]);
 			}
 		}
 	}
@@ -294,9 +276,6 @@ l2fwd_main_loop(void)
 
 	switch (qconf->type)
 	{
-	case RECEIVE_TYPE:
-		bandwidth_receive_package(0, qconf);
-		break;
 	case TRANSMIT_TYPE:
 		bandwidth_send_package(0, qconf);
 		break;
@@ -414,7 +393,7 @@ int main(int argc, char **argv)
 	unsigned nb_ports_in_mask = 0;
 	unsigned int nb_lcores = 0;
 	unsigned int nb_mbufs;
-	int tx_queue_count = 0, rx_queue_count = 0;
+	int tx_queue_count = 0;
 
 	/* init EAL */
 	ret = rte_eal_init(argc, argv);
@@ -446,14 +425,33 @@ int main(int argc, char **argv)
 	RTE_ETH_FOREACH_DEV(portid)
 	{
 		/* skip ports that are not enabled */
+
+		ret = rte_eth_macaddr_get(portid,
+								  &l2fwd_ports_eth_addr[portid]);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+					 "Cannot get MAC address: err=%d, port=%u\n",
+					 ret, portid);
+
+		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
+			   portid,
+			   l2fwd_ports_eth_addr[portid].addr_bytes[0],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[1],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[2],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[3],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[4],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
+
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			continue;
-		while (rx_queue_count < nb_rx_queue || tx_queue_count < nb_tx_queue)
+
+		nb_ports_available++;
+
+		while (tx_queue_count < nb_tx_queue)
 		{
 			/* get the lcore_id for this port */
 			while (rte_lcore_is_enabled(rx_lcore_id) == 0 || rx_lcore_id == rte_get_main_lcore() ||
-				   lcore_queue_conf[rx_lcore_id].n_rx_queue + lcore_queue_conf[rx_lcore_id].n_tx_queue ==
-					   MAX_QUEUE_PER_LCORE)
+				   lcore_queue_conf[rx_lcore_id].n_tx_queue == MAX_QUEUE_PER_LCORE)
 			{
 				rx_lcore_id++;
 				if (rx_lcore_id >= RTE_MAX_LCORE)
@@ -466,38 +464,22 @@ int main(int argc, char **argv)
 				qconf = &lcore_queue_conf[rx_lcore_id];
 				nb_lcores++;
 			}
-			if (rx_queue_count == nb_rx_queue && tx_queue_count == nb_tx_queue)
+			if (tx_queue_count == nb_tx_queue)
 			{
 				continue;
 			}
-			if (rx_queue_count < nb_rx_queue)
+
+			qconf->type = TRANSMIT_TYPE;
+			for (int i = 0; tx_queue_count < nb_tx_queue && i < MAX_QUEUE_PER_LCORE; i++)
 			{
-				qconf->type = RECEIVE_TYPE;
-				for (int i = 0; rx_queue_count < nb_rx_queue && i < MAX_QUEUE_PER_LCORE; i++)
-				{
-					qconf->rx_queue_list[i] = rx_queue_count;
-					qconf->n_rx_queue++;
-					rx_queue_count++;
-				}
-				printf("Lcore %u: [Receive], queue from %d to %d\n", rx_lcore_id, qconf->rx_queue_list[0], qconf->rx_queue_list[qconf->n_rx_queue - 1]);
+				qconf->tx_queue_list[i] = tx_queue_count;
+				qconf->n_tx_queue++;
+				tx_queue_count++;
 			}
-			else
-			{
-				qconf->type = TRANSMIT_TYPE;
-				for (int i = 0; tx_queue_count < nb_tx_queue && i < MAX_QUEUE_PER_LCORE; i++)
-				{
-					qconf->tx_queue_list[i] = tx_queue_count;
-					qconf->n_tx_queue++;
-					tx_queue_count++;
-				}
-				printf("Lcore %u: [Transmit], queue from %d to %d\n", rx_lcore_id, qconf->tx_queue_list[0], qconf->tx_queue_list[qconf->n_tx_queue - 1]);
-			}
+			printf("Lcore %u: [Transmit], queue from %d to %d\n", rx_lcore_id, qconf->tx_queue_list[0], qconf->tx_queue_list[qconf->n_tx_queue - 1]);
 		}
 	}
-
-	nb_mbufs = RTE_MAX(nb_ports * (nb_rxd + nb_txd + MAX_PKT_BURST +
-								   nb_lcores * MEMPOOL_CACHE_SIZE),
-					   131072);
+	nb_mbufs = nb_ports_available * NUM_MBUFS * nb_lcores;
 	/* create the mbuf pool */
 	bandwidth_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
 													 MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
@@ -519,7 +501,6 @@ int main(int argc, char **argv)
 			printf("Skipping disabled port %u\n", portid);
 			continue;
 		}
-		nb_ports_available++;
 
 		/* init port */
 		printf("Initializing port %u... ", portid);
@@ -550,13 +531,6 @@ int main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 					 "Can't set promiscuous: err=%d, port=%u\n",
-					 ret, portid);
-
-		ret = rte_eth_macaddr_get(portid,
-								  &l2fwd_ports_eth_addr[portid]);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-					 "Cannot get MAC address: err=%d, port=%u\n",
 					 ret, portid);
 
 		/* init RX queue */
@@ -600,15 +574,6 @@ int main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",
 					 ret, portid);
-
-		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
-			   portid,
-			   l2fwd_ports_eth_addr[portid].addr_bytes[0],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[1],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[2],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[3],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[4],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
 
 		/* initialize port stats */
 	}

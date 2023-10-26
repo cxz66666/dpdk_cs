@@ -54,10 +54,9 @@ static int mac_updating = 1;
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 8192
-#define RTE_TEST_TX_DESC_DEFAULT 8192
-static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+static uint16_t nb_rxd = 1024;
+static uint16_t nb_txd = 1024;
+static uint32_t NUM_MBUFS = 1024 * 8;
 
 static uint8_t rss_key[40] = {0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
 							  0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3, 0x8f, 0xb0,
@@ -440,9 +439,29 @@ int main(int argc, char **argv)
 	/* Initialize the port/queue configuration of each logical core */
 	RTE_ETH_FOREACH_DEV(portid)
 	{
+
+		ret = rte_eth_macaddr_get(portid,
+								  &l2fwd_ports_eth_addr[portid]);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+					 "Cannot get MAC address: err=%d, port=%u\n",
+					 ret, portid);
+
+		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
+			   portid,
+			   l2fwd_ports_eth_addr[portid].addr_bytes[0],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[1],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[2],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[3],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[4],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
+
 		/* skip ports that are not enabled */
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			continue;
+
+		nb_ports_available++;
+
 		while (tx_rx_queue_count < TX_RX_QUEUE)
 		{
 			/* get the lcore_id for this port */
@@ -474,9 +493,8 @@ int main(int argc, char **argv)
 		}
 	}
 
-	nb_mbufs = RTE_MAX(nb_ports * (nb_rxd + nb_txd + MAX_PKT_BURST +
-								   nb_lcores * MEMPOOL_CACHE_SIZE),
-					   131072);
+	nb_mbufs = nb_ports_available * NUM_MBUFS;
+
 	/* create the mbuf pool */
 	for (int i = 0; i < TX_RX_QUEUE; i++)
 	{
@@ -503,7 +521,6 @@ int main(int argc, char **argv)
 			printf("Skipping disabled port %u\n", portid);
 			continue;
 		}
-		nb_ports_available++;
 
 		/* init port */
 		printf("Initializing port %u... ", portid);
@@ -545,13 +562,6 @@ int main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 					 "Can't set promiscuous: err=%d, port=%u\n",
-					 ret, portid);
-
-		ret = rte_eth_macaddr_get(portid,
-								  &l2fwd_ports_eth_addr[portid]);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-					 "Cannot get MAC address: err=%d, port=%u\n",
 					 ret, portid);
 
 		/* init RX queue */
@@ -597,14 +607,6 @@ int main(int argc, char **argv)
 
 		printf("done: \n");
 
-		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
-			   portid,
-			   l2fwd_ports_eth_addr[portid].addr_bytes[0],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[1],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[2],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[3],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[4],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
 		// for (int i = 0; i < TX_RX_QUEUE; i++)
 		// {
 		// 	flow[i] = generate_ipv4_flow(portid, i,

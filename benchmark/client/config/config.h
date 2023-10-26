@@ -67,6 +67,23 @@ static uint8_t rss_key[40] = {0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
                               0x77, 0xcb, 0x2d, 0xa3, 0x80, 0x30, 0xf2, 0x0c,
                               0x6a, 0x42, 0xb7, 0x3b, 0xbe, 0xac, 0x01, 0xfa};
 
+struct rte_ether_addr increment_mac_address(struct rte_ether_addr mac)
+{
+    for (int i = RTE_ETHER_ADDR_LEN - 1; i >= 0; --i)
+    {
+        if (mac.addr_bytes[i] != 0xFF)
+        {
+            mac.addr_bytes[i]++;
+            break;
+        }
+        else
+        {
+            mac.addr_bytes[i] = 0x00;
+        }
+    }
+    return mac;
+}
+
 struct lcore_queue_conf
 {
     uint8_t type; // 0 is rx and 1 is tx
@@ -93,6 +110,12 @@ struct Object_16
     /* data */
 };
 
+struct Object_22
+{
+    uint8_t data[22];
+    /* data */
+};
+
 struct Object_32
 {
     uint8_t data[32];
@@ -105,11 +128,23 @@ struct Object_64
     /* data */
 } __rte_cache_aligned;
 
+struct Object_86
+{
+    uint8_t data[86];
+    /* data */
+};
+
 struct Object_128
 {
     uint8_t data[128];
     /* data */
 } __rte_cache_aligned;
+
+struct Object_214
+{
+    uint8_t data[214];
+    /* data */
+};
 
 struct Object_256
 {
@@ -123,10 +158,26 @@ struct Object_512
     /* data */
 } __rte_cache_aligned;
 
+struct Object_470
+{
+    uint8_t data[470];
+    /* data */
+};
+
+struct Object_1k
+{
+    uint8_t data[982];
+    /* data */
+};
 struct Object_1024
 {
     uint8_t data[1024];
     /* data */
 } __rte_cache_aligned;
 
+struct Object_1472
+{
+    uint8_t data[1472];
+    /* data */
+};
 #endif

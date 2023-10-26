@@ -6,11 +6,11 @@
 
 static volatile bool force_quit;
 
-#define OBJECT_TEST Object_16
+#define OBJECT_TEST Object_1k
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
-#define SEND_PKT_BURST 1
+#define SEND_PKT_BURST 2048
 #define RECV_PKT_BURST 8
 /*
  * Configurable number of RX/TX ring descriptors
@@ -18,8 +18,8 @@ static volatile bool force_quit;
 static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
-#define nb_rx_queue RX_QUEUE
-#define nb_tx_queue TX_QUEUE
+#define nb_rx_queue 1
+#define nb_tx_queue 1
 /* ethernet addresses of ports */
 static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
 
@@ -221,9 +221,9 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 	while (!force_quit)
 	{
 		total_send = 0;
-		for (i = 0; i < qconf->n_tx_queue; i++)
+		for (i = 0; i < 1 && !force_quit; i++)
 		{
-			queueid = qconf->tx_queue_list[i];
+			queueid = qconf->tx_queue_list[0];
 			for (j = 0; j < SEND_PKT_BURST; j++)
 			{
 				pkt[j] = rte_pktmbuf_alloc(delay_pktmbuf_pool);
@@ -245,8 +245,8 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 				ip_hdr->fragment_offset = RTE_BE16(0);
 				ip_hdr->time_to_live = 64;
 				ip_hdr->next_proto_id = IPPROTO_UDP;
-				ip_hdr->src_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
-				ip_hdr->dst_addr = RTE_BE16(rte_rand_max(UINT32_MAX));
+				ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+				ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 
 				// ip_hdr->src_addr = RTE_BE16(1);
 				// ip_hdr->dst_addr = RTE_BE16(1);
@@ -270,12 +270,12 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf)
 			port_statistics[portid].tx[queueid] += nb_tx;
 			port_statistics[portid].tx_dropped[queueid] += SEND_PKT_BURST - nb_tx;
 			total_send += nb_tx;
-			for (j = 0; j < SEND_PKT_BURST; j++)
+			for (j = nb_tx; j < SEND_PKT_BURST; j++)
 			{
 				rte_pktmbuf_free(pkt[j]);
 			}
 		}
-
+		total_send = 1;
 		while (!force_quit && total_send > 0)
 		{
 			for (i = 0; i < qconf->n_tx_queue; i++)
@@ -509,9 +509,28 @@ int main(int argc, char **argv)
 	/* Initialize the port/queue configuration of each logical core */
 	RTE_ETH_FOREACH_DEV(portid)
 	{
+		ret = rte_eth_macaddr_get(portid,
+								  &l2fwd_ports_eth_addr[portid]);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+					 "Cannot get MAC address: err=%d, port=%u\n",
+					 ret, portid);
+
+		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
+			   portid,
+			   l2fwd_ports_eth_addr[portid].addr_bytes[0],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[1],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[2],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[3],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[4],
+			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
+
 		/* skip ports that are not enabled */
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			continue;
+
+		nb_ports_available++;
+
 		while (tx_queue_count < nb_tx_queue)
 		{
 			/* get the lcore_id for this port */
@@ -546,9 +565,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	nb_mbufs = RTE_MAX(nb_ports * (nb_rxd + nb_txd + SEND_PKT_BURST + RECV_PKT_BURST +
-								   nb_lcores * MEMPOOL_CACHE_SIZE),
-					   131072);
+	nb_mbufs = nb_ports_available * (nb_rxd + nb_txd + SEND_PKT_BURST + RECV_PKT_BURST) * nb_lcores;
 	/* create the mbuf pool */
 	delay_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
 												 MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
@@ -570,7 +587,6 @@ int main(int argc, char **argv)
 			printf("Skipping disabled port %u\n", portid);
 			continue;
 		}
-		nb_ports_available++;
 
 		/* init port */
 		printf("Initializing port %u... ", portid);
@@ -601,13 +617,6 @@ int main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 					 "Can't set promiscuous: err=%d, port=%u\n",
-					 ret, portid);
-
-		ret = rte_eth_macaddr_get(portid,
-								  &l2fwd_ports_eth_addr[portid]);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-					 "Cannot get MAC address: err=%d, port=%u\n",
 					 ret, portid);
 
 		/* init RX queue */
@@ -652,14 +661,6 @@ int main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",
 					 ret, portid);
 
-		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
-			   portid,
-			   l2fwd_ports_eth_addr[portid].addr_bytes[0],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[1],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[2],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[3],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[4],
-			   l2fwd_ports_eth_addr[portid].addr_bytes[5]);
 		for (int i = 0; i < nb_rx_queue; i++)
 		{
 			rte_eth_add_rx_callback(portid, i, calc_latency, NULL);
