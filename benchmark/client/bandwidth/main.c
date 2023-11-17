@@ -18,8 +18,8 @@ static volatile bool force_quit;
 static uint16_t nb_rxd = 1024;
 static uint16_t nb_txd = 1024;
 static uint32_t NUM_MBUFS = 1024 * 8;
-#define nb_rx_queue 1
-#define nb_tx_queue 1
+#define nb_rx_queue 4
+#define nb_tx_queue 4
 
 /* ethernet addresses of ports */
 static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -149,6 +149,7 @@ l2fwd_main_lcore_show_status(void)
 		RTE_LOG(INFO, L2FWD, "lcore %u don't be main lcore\n", lcore_id);
 		return;
 	}
+	sleep(1);
 
 	while (!force_quit)
 	{
@@ -176,6 +177,7 @@ l2fwd_main_lcore_show_status(void)
 		}
 
 		prev_tsc = cur_tsc;
+		usleep(1000);
 	}
 }
 
