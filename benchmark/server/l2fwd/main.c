@@ -193,7 +193,6 @@ print_stats(void) {
 static void
 l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid) {
 	struct rte_ether_hdr *eth;
-	void *tmp;
 
 	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
@@ -289,8 +288,7 @@ l2fwd_launch_one_lcore(__rte_unused void *dummy) {
 
 	if (rte_lcore_id() == rte_get_main_lcore()) {
 		l2fwd_main_lcore_show_status();
-	}
-	else {
+	} else {
 		l2fwd_main_loop();
 	}
 	return 0;
