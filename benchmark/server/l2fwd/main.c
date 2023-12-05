@@ -52,6 +52,9 @@ static int mac_updating = 1;
 #define MAX_PKT_BURST 256
 #define MEMPOOL_CACHE_SIZE 512
 
+#define DPA_THREAD_NUM 64
+#define WAIT_SECOND -1
+#define DO_REFACTOR 1
 /*
  * Configurable number of RX/TX ring descriptors
  */
@@ -71,7 +74,7 @@ static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
 /* mask of enabled ports */
 static uint32_t l2fwd_enabled_port_mask = 1;
 
-#define TX_RX_QUEUE 1
+#define TX_RX_QUEUE 4
 
 #define MAX_QUEUE_PER_LCORE 1
 
@@ -190,6 +193,61 @@ print_stats(void) {
 	fflush(stdout);
 }
 
+static void send_initial_packet(uint16_t portid, unsigned int queueid) {
+	struct rte_mbuf *pkt[DPA_THREAD_NUM];
+
+	struct rte_ether_hdr *eth_hdr;
+	struct rte_ipv4_hdr *ip_hdr;
+	struct rte_udp_hdr *udp_hdr;
+	struct rte_ether_addr FAKE_DST_ADDR = { {0x02, 0x01, 0x01, 0x01, 0x01, 0x01} };
+
+	for (int i = 0;i < DPA_THREAD_NUM;i++) {
+		pkt[i] = rte_pktmbuf_alloc(l2fwd_pktmbuf_pool[queueid]);
+		pkt[i]->l2_len = sizeof(struct rte_ether_hdr);
+		pkt[i]->l3_len = sizeof(struct rte_ipv4_hdr);
+		pkt[i]->l4_len = sizeof(struct rte_udp_hdr);
+		pkt[i]->ol_flags |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
+		eth_hdr = rte_pktmbuf_mtod(pkt[i], struct rte_ether_hdr *);
+		eth_hdr->dst_addr = FAKE_DST_ADDR;
+		eth_hdr->dst_addr.addr_bytes[5] += i;
+		// eth_hdr->dst_addr = DST_ADDR;
+		eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
+		eth_hdr->ether_type = RTE_BE16(0x0800);
+
+		ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+		ip_hdr->version_ihl = 0x45;
+		ip_hdr->type_of_service = 0;
+		ip_hdr->total_length = RTE_BE16(50 + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ipv4_hdr));
+		ip_hdr->packet_id = RTE_BE16(0);
+		ip_hdr->fragment_offset = RTE_BE16(0);
+		ip_hdr->time_to_live = 64;
+		ip_hdr->next_proto_id = IPPROTO_UDP;
+		ip_hdr->src_addr = RTE_BE32(1);
+		ip_hdr->dst_addr = RTE_BE32(1);
+		udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
+		udp_hdr->dgram_len = RTE_BE16(50 + sizeof(struct rte_udp_hdr));
+		// udp_hdr->src_port = RTE_BE16(1);
+		// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
+		udp_hdr->src_port = RTE_BE16(1);
+		udp_hdr->dst_port = RTE_BE16(1);
+		udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[i]->ol_flags);
+		ip_hdr->hdr_checksum = 0;
+		pkt[i]->data_len = 50 + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
+		pkt[i]->pkt_len = 50 + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
+	}
+	uint16_t nb_tx = rte_eth_tx_burst(portid, queueid, pkt, DPA_THREAD_NUM);
+	for (int i = nb_tx;i < DPA_THREAD_NUM;i++) {
+		rte_pktmbuf_free(pkt[i]);
+	}
+	if (nb_tx != DPA_THREAD_NUM) {
+		force_quit = true;
+		printf("send error, ready to quit\n");
+	} else {
+		printf("send success!\n");
+	}
+}
+
+
 static void
 l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid) {
 	struct rte_ether_hdr *eth;
@@ -213,6 +271,7 @@ l2fwd_main_lcore_show_status(void) {
 		return;
 	}
 	sleep(1);
+	int count_second = 0;
 	while (!force_quit) {
 		cur_tsc = rte_rdtsc();
 		diff_tsc = cur_tsc - prev_tsc;
@@ -226,6 +285,10 @@ l2fwd_main_lcore_show_status(void) {
 			print_stats();
 			/* reset the timer */
 			timer_tsc = 0;
+			count_second++;
+			if (count_second == WAIT_SECOND) {
+				send_initial_packet(0, 0);
+			}
 		}
 
 		prev_tsc = cur_tsc;
@@ -265,15 +328,17 @@ l2fwd_main_loop(void) {
 			nb_rx = rte_eth_rx_burst(0, queueid,
 				pkts_burst, MAX_PKT_BURST);
 			port_statistics[0].rx[queueid] += nb_rx;
+			if (DO_REFACTOR) {
+				for (j = 0; j < nb_rx; j++) {
+					// udp_hdr = rte_pktmbuf_mtod_offset(pkts_burst[j], struct rte_udp_hdr *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
+					// printf("%d %d %d\n", udp_hdr->src_port, udp_hdr->dst_port, pkts_burst[j]->hash.rss);
+					l2fwd_mac_updating(pkts_burst[j], 0);
+				}
 
-			for (j = 0; j < nb_rx; j++) {
-				// udp_hdr = rte_pktmbuf_mtod_offset(pkts_burst[j], struct rte_udp_hdr *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
-				// printf("%d %d %d\n", udp_hdr->src_port, udp_hdr->dst_port, pkts_burst[j]->hash.rss);
-				l2fwd_mac_updating(pkts_burst[j], 0);
+				sent = rte_eth_tx_burst(0, queueid, pkts_burst, nb_rx);
+			} else {
+				sent = 0;
 			}
-
-			sent = rte_eth_tx_burst(0, queueid, pkts_burst, nb_rx);
-
 			for (j = sent; j < nb_rx; j++) {
 				rte_pktmbuf_free(pkts_burst[j]);
 			}
@@ -526,8 +591,8 @@ int main(int argc, char **argv) {
 				"Cannot adjust number of descriptors: err=%d, port=%u\n",
 				ret, portid);
 
-		ret = rte_eth_promiscuous_enable(portid);
-		// ret = rte_eth_promiscuous_disable(portid);
+		// ret = rte_eth_promiscuous_enable(portid);
+		ret = rte_eth_promiscuous_disable(portid);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 				"Can't set promiscuous: err=%d, port=%u\n",
@@ -543,7 +608,7 @@ int main(int argc, char **argv) {
 				&rxq_conf,
 				l2fwd_pktmbuf_pool[i]);
 			if (ret < 0)
-				rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup:err=%d, port=%u\n",
+				rte_exit(EXIT_FAILURE, "rte_weth_rx_queue_setup:err=%d, port=%u\n",
 					ret, portid);
 		}
 

@@ -299,11 +299,13 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 					pkt_id++;
 				}
 			}
-			uint16_t nb_tx = rte_eth_tx_burst(portid, queueid, pkt, pkt_id);
-			port_statistics[portid].tx[queueid] += nb_tx;
-			port_statistics[portid].tx_dropped[queueid] += pkt_id - nb_tx;
-			for (j = nb_tx; j < pkt_id; j++) {
-				rte_pktmbuf_free(pkt[j]);
+			if (pkt_id > 0) {
+				uint16_t nb_tx = rte_eth_tx_burst(portid, queueid, pkt, pkt_id);
+				port_statistics[portid].tx[queueid] += nb_tx;
+				port_statistics[portid].tx_dropped[queueid] += pkt_id - nb_tx;
+				for (j = nb_tx; j < pkt_id; j++) {
+					rte_pktmbuf_free(pkt[j]);
+				}
 			}
 		}
 
@@ -318,12 +320,7 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 					struct rte_ether_hdr *eth = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
 					port_statistics[0].rx_thread[eth->src_addr.addr_bytes[5] - 1]++;
 					credits[eth->src_addr.addr_bytes[5] - 1]++;
-					// l2fwd_mac_updating(pkt[j]);
-					// uint16_t nb_tx = rte_eth_tx_burst(portid, queueid, pkt + j, 1);
-					// port_statistics[portid].tx[queueid] += nb_tx;
-					// port_statistics[portid].tx_dropped[queueid] += 1 - nb_tx;
-				}
-				else {
+				} else {
 					// printf("%u happend\n", rte_pktmbuf_pkt_len(pkt[j]));
 					// char *ptr = rte_pktmbuf_mtod(pkt[j], char *);
 					// for (unsigned k = 0; k < rte_pktmbuf_pkt_len(pkt[j]); k++)
@@ -409,8 +406,7 @@ static int
 l2fwd_launch_one_lcore(__rte_unused void *dummy) {
 	if (rte_lcore_id() == rte_get_main_lcore()) {
 		l2fwd_main_lcore_show_status();
-	}
-	else {
+	} else {
 		l2fwd_main_loop();
 	}
 	return 0;
