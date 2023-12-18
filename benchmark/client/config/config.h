@@ -39,6 +39,7 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
+#include <hdr/hdr_histogram.h>
 
 #define RTE_TEST_RX_DESC_DEFAULT 8192
 #define RTE_TEST_TX_DESC_DEFAULT 8192
@@ -53,16 +54,13 @@
 
 #define MEMPOOL_CACHE_SIZE 256
 
-// bf2 mac addr
-// struct rte_ether_addr DST_ADDR = {{0x02, 0xe3, 0xc3, 0xe8, 0xba, 0x3c}};
-
 // bf2 p0 mac addr
 // struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xee} };
 
 // bf2 bond0 mac addr
-// struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xe6} };
+struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xe6} };
 // host2 mac addr
-struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xde} };
+// struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xde} };
 
 static uint8_t rss_key[40] = { 0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
                               0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3, 0x8f, 0xb0,
@@ -75,13 +73,37 @@ struct rte_ether_addr increment_mac_address(struct rte_ether_addr mac) {
         if (mac.addr_bytes[i] != 0xFF) {
             mac.addr_bytes[i]++;
             break;
-        }
-        else {
+        } else {
             mac.addr_bytes[i] = 0x00;
         }
     }
     return mac;
 }
+
+struct hdr_histogram *latency_hist;
+void init_hdr() {
+    int ret = hdr_init(1, 1000 * 1000 * 10, 3,
+        &latency_hist);
+    assert(ret == 0);
+}
+
+void close_hdr() {
+    hdr_close(latency_hist);
+}
+
+bool write_hdr_result(char *filename) {
+    FILE *fp = fopen(filename, "w");
+
+    if (fp == NULL) {
+        return false;
+    }
+
+    hdr_percentiles_print(latency_hist, fp, 5, 10, CLASSIC);
+    fclose(fp);
+    hdr_reset(latency_hist);
+    return true;
+}
+
 
 struct lcore_queue_conf {
     uint8_t type; // 0 is rx and 1 is tx

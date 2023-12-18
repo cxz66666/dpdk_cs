@@ -85,6 +85,9 @@ calc_latency(uint16_t port, uint16_t qidx,
 		long time = (now.tv_sec - start->tv_sec) * 1e9 + now.tv_nsec - start->tv_nsec;
 		if (unlikely(time < 0)) {
 			printf("%ld %ld %ld %ld\n", now.tv_sec, now.tv_nsec, start->tv_sec, start->tv_nsec);
+			// within 100 us is acceptable
+		} else if (time < 100000) {
+			hdr_record_value(latency_hist, time * 10);
 		}
 		cycles += time;
 	}
@@ -639,6 +642,8 @@ int main(int argc, char **argv) {
 
 	check_all_ports_link_status(l2fwd_enabled_port_mask);
 
+	init_hdr();
+
 	ret = 0;
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, NULL, CALL_MAIN);
@@ -663,6 +668,11 @@ int main(int argc, char **argv) {
 
 	/* clean up the EAL */
 	rte_eal_cleanup();
+	char filename[100];
+	sprintf(filename, "delay_%ld.txt", sizeof(struct OBJECT_TEST) + 42);
+	write_hdr_result(filename);
+	close_hdr();
+
 	printf("Bye...\n");
 
 	return ret;
