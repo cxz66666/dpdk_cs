@@ -170,29 +170,6 @@ print_stats(void) {
 	fflush(stdout);
 }
 
-static void delay_receive_package(unsigned portid, struct lcore_queue_conf *qconf) {
-	unsigned i, j, queueid, nb_rx;
-	struct rte_mbuf *pkts_burst[RECV_PKT_BURST];
-
-	while (!force_quit) {
-		/*
-		 * Read packet from RX queues
-		 */
-		for (i = 0; i < qconf->n_rx_queue; i++) {
-
-			queueid = qconf->rx_queue_list[i];
-			nb_rx = rte_eth_rx_burst(portid, queueid,
-				pkts_burst, RECV_PKT_BURST);
-
-			port_statistics[portid].rx[queueid] += nb_rx;
-
-			for (j = 0; j < nb_rx; j++) {
-				rte_pktmbuf_free(pkts_burst[j]);
-			}
-		}
-	}
-}
-
 static void
 delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 	unsigned i, j, queueid, total_send;
