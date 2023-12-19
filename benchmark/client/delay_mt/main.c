@@ -237,10 +237,10 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 	struct rte_ether_hdr *eth_hdr;
 	struct rte_ipv4_hdr *ip_hdr;
 	struct rte_udp_hdr *udp_hdr;
-	rte_be16_t package_id = 0;
+	uint16_t package_id = 0;
 
-	struct OBJECT_TEST *msg;
-	struct OBJECT_TEST object_test;
+	// struct OBJECT_TEST *msg;
+	// struct OBJECT_TEST object_test;
 	int pkt_size = sizeof(struct OBJECT_TEST) + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
 
 	int credits[THREAD_NUM];
@@ -271,7 +271,8 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 					ip_hdr->version_ihl = 0x45;
 					ip_hdr->type_of_service = 0;
 					ip_hdr->total_length = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ipv4_hdr));
-					ip_hdr->packet_id = RTE_BE16(package_id++);
+					ip_hdr->packet_id = RTE_BE16(package_id);
+					package_id++;
 					ip_hdr->fragment_offset = RTE_BE16(0);
 					ip_hdr->time_to_live = 64;
 					ip_hdr->next_proto_id = IPPROTO_UDP;
@@ -290,7 +291,7 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 					udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[pkt_id]->ol_flags);
 					ip_hdr->hdr_checksum = 0;
 
-					msg = (struct OBJECT_TEST *)(udp_hdr + 1);
+					// msg = (struct OBJECT_TEST *)(udp_hdr + 1);
 					// memcpy(msg, &object_test, sizeof(object_test));
 
 					pkt[pkt_id]->data_len = pkt_size;
@@ -315,7 +316,7 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 			uint16_t nb_rx = rte_eth_rx_burst(portid, queueid,
 				pkt, RECV_PKT_BURST);
 			for (j = 0; j < nb_rx; j++) {
-				if (rte_pktmbuf_pkt_len(pkt[j]) == RTE_MAX(60, pkt_size)) {
+				if (rte_pktmbuf_pkt_len(pkt[j]) == (uint32_t)RTE_MAX(60, pkt_size)) {
 					port_statistics[portid].rx[queueid]++;
 					struct rte_ether_hdr *eth = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
 					port_statistics[0].rx_thread[eth->src_addr.addr_bytes[5] - 1]++;
@@ -491,7 +492,6 @@ int main(int argc, char **argv) {
 	uint16_t nb_ports_available = 0;
 	uint16_t portid;
 	unsigned lcore_id, rx_lcore_id;
-	unsigned nb_ports_in_mask = 0;
 	unsigned int nb_lcores = 0;
 	unsigned int nb_mbufs;
 	int tx_queue_count = 0;

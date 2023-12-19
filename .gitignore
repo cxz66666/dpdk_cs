@@ -1,6 +1,12 @@
 **/build/
 **/bin/
 **/lib/
+**/build_host/
+**/bin_host/
+**/lib_host/
+**/build_dpu/
+**/bin_dpu/
+**/lib_dpu/
 # Prerequisites
 *.d
 

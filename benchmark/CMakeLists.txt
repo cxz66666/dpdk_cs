@@ -3,10 +3,29 @@ cmake_minimum_required(VERSION 3.10)
 project(DPDK_SAMPLE)
 
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib)
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+    message(STATUS "Compile on DPU")
+    message(STATUS "Output Dir is /bin_dpu")
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin_dpu)
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build_dpu)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib_dpu)
 
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+    message(STATUS "Compile on HOST")
+    message(STATUS "Output Dir is /bin_host")
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin_host)
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build_host)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib_host)
+else()
+    # 在其他架构下的逻辑代码
+    message("Unknown architecture detected")
+    return()
+endif ()
+
+
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -DALLOW_EXPERIMENTAL_API -Wall -Wextra -Werror -pedantic")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-function -Wno-missing-braces")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-nested-anon-types -Wno-keyword-macro -Wno-deprecated-declarations")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DALLOW_EXPERIMENTAL_API -std=c++20 -Wall -Wextra -Werror -pedantic")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-function -Wno-missing-braces")
@@ -14,7 +33,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-nested-anon-types -Wno-keyword-macr
 # if we don't add this, we will get *** stack smashing detected ***: terminated error
 add_compile_options(-fno-stack-protector)
 
-add_definitions(-DALLOW_EXPERIMENTAL_API)
 
 
 find_package(PkgConfig REQUIRED)
@@ -38,7 +56,7 @@ include_directories("${CMAKE_SOURCE_DIR}/client/config")
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/HdrHistogram)
 
-set(LIBRARIES ${LIBRARIES} PkgConfig::LIBDPDK hdr_histogram_static)
+set(LIBRARIES ${LIBRARIES} PkgConfig::LIBDPDK hdr_histogram)
 
 
 set(UTILSOURCES )

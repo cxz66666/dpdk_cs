@@ -300,11 +300,10 @@ l2fwd_main_lcore_show_status(void) {
 static void
 l2fwd_main_loop(void) {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
-	struct rte_mbuf *m;
 	unsigned lcore_id;
 	unsigned i, j, queueid, nb_rx;
 	struct lcore_queue_conf *qconf;
-	struct rte_udp_hdr *udp_hdr;
+	// struct rte_udp_hdr *udp_hdr;
 	int sent;
 
 	lcore_id = rte_lcore_id();
@@ -436,13 +435,11 @@ int main(int argc, char **argv) {
 	int ret;
 	uint16_t nb_ports;
 	uint16_t nb_ports_available = 0;
-	uint16_t portid, last_port;
+	uint16_t portid;
 	unsigned lcore_id, rx_lcore_id;
-	unsigned nb_ports_in_mask = 0;
 	unsigned int nb_lcores = 0;
 	unsigned int nb_mbufs;
 	int tx_rx_queue_count = 0;
-	struct rte_flow_error error;
 
 	/* init EAL */
 	ret = rte_eal_init(argc, argv);
@@ -638,20 +635,6 @@ int main(int argc, char **argv) {
 				ret, portid);
 
 		printf("done: \n");
-
-		// for (int i = 0; i < TX_RX_QUEUE; i++)
-		// {
-		// 	flow[i] = generate_ipv4_flow(portid, i,
-		// 								 dst_ip_mask[i], FULL_MASK,
-		// 								 dst_ip_mask[i], FULL_MASK, &error);
-		// 	if (!flow[i])
-		// 	{
-		// 		printf("Flow can't be created %d message: %s\n",
-		// 			   error.type,
-		// 			   error.message ? error.message : "(no stated reason)");
-		// 		rte_exit(EXIT_FAILURE, "error in creating flow");
-		// 	}
-		// }
 	}
 
 	/* initialize port stats */
