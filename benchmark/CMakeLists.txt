@@ -52,6 +52,7 @@ include_directories(${CMAKE_SOURCE_DIR}/HdrHistogram/include)
 include_directories("${LIBDPDK_INCLUDE_DIRS}")
 
 include_directories("${CMAKE_SOURCE_DIR}/client/config")
+include_directories("${CMAKE_SOURCE_DIR}/common")
 
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/HdrHistogram)
@@ -68,3 +69,4 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/client/bg_bw_c2s)
 add_subdirectory(${CMAKE_SOURCE_DIR}/client/bg_bw_s2c)
 add_subdirectory(${CMAKE_SOURCE_DIR}/client/bg_bw_c2s2c)
 add_subdirectory(${CMAKE_SOURCE_DIR}/server/l2fwd)
+add_subdirectory(${CMAKE_SOURCE_DIR}/server/l2fwd_client)

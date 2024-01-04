@@ -39,7 +39,6 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
-#include <hdr/hdr_histogram.h>
 
 #define RTE_TEST_RX_DESC_DEFAULT 8192
 #define RTE_TEST_TX_DESC_DEFAULT 8192
@@ -89,29 +88,7 @@ struct rte_ether_addr increment_mac_address(struct rte_ether_addr mac) {
     return mac;
 }
 
-struct hdr_histogram *latency_hist;
-void init_hdr() {
-    int ret = hdr_init(1, 1000 * 1000 * 10, 3,
-        &latency_hist);
-    assert(ret == 0);
-}
 
-void close_hdr() {
-    hdr_close(latency_hist);
-}
-
-bool write_hdr_result(char *filename) {
-    FILE *fp = fopen(filename, "w");
-
-    if (fp == NULL) {
-        return false;
-    }
-
-    hdr_percentiles_print(latency_hist, fp, 5, 10, CLASSIC);
-    fclose(fp);
-    hdr_reset(latency_hist);
-    return true;
-}
 
 
 struct lcore_queue_conf {

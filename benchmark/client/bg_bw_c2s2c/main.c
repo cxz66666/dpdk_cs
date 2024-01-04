@@ -3,6 +3,7 @@
  */
 
 #include "config.h"
+#include <hdr.h>
 
 static volatile bool force_quit;
 
@@ -310,7 +311,7 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 			}
 		}
 		uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
-		uint64_t timer_period_x_us = 15000;
+		uint64_t timer_period_x_us = 300000;
 		prev_tsc = rte_rdtsc();
 		timer_tsc = 0;
 		while (!force_quit) {
