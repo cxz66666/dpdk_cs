@@ -6,35 +6,59 @@
 
 static volatile bool force_quit;
 
-#define OBJECT_TEST Object_22	
+#define OBJECT_TEST Object_1k
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
-#define SEND_PKT_BURST 1
-#define RECV_PKT_BURST 8
+#define RECV_PKT_BURST 256
+
+#define THREAD_NUM 64
+
+#define THREAD_CREDITS 16
+
+#define CALC_LAT 1
 /*
  * Configurable number of RX/TX ring descriptors
  */
-static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+static uint16_t nb_rxd = 1024;
+static uint16_t nb_txd = 1024;
+static uint32_t NUM_MBUFS = 1024 * 8;
 
-#define nb_rx_queue 1
-#define nb_tx_queue 1
+
+// 如果要测host相关的delay，记得将nb_tx_queue设置成13， nb_delay_queue设置成1
+// 如果只打流，nb_delay_queue设置成0
+// server的l2fwd使用15 threads
+#define nb_tx_queue 13
+#define nb_delay_queue 0
+#define nb_rx_queue nb_delay_queue
+#define nb_max_queue (nb_rx_queue > nb_tx_queue ? nb_rx_queue : nb_tx_queue)
 /* ethernet addresses of ports */
 static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
 
 /* mask of enabled ports */
 static uint32_t l2fwd_enabled_port_mask = 1;
 
+struct rte_ether_addr target_addrs[190];
+
 struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mtu = RTE_ETHER_MTU,
+		.mq_mode = RTE_ETH_MQ_RX_RSS,
+		.offloads = RTE_ETH_RX_OFFLOAD_RSS_HASH | RTE_ETH_RX_OFFLOAD_CHECKSUM,
 	},
+	.rx_adv_conf = {
+		.rss_conf = {
+			.rss_key = rss_key,
+			.rss_key_len = 40,
+			.rss_hf = RTE_ETH_RSS_UDP,
+		},
+	},
+
 	.txmode = {
 		.mq_mode = RTE_ETH_MQ_TX_NONE,
-		// .offloads = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
+		.offloads = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
 	},
 };
 
@@ -42,10 +66,11 @@ struct rte_mempool *delay_pktmbuf_pool = NULL;
 
 /* Per-port statistics struct */
 struct delay_port_statistics {
-	uint64_t tx[nb_tx_queue];
-	uint64_t rx[nb_rx_queue];
-	uint64_t tx_dropped[nb_tx_queue];
-	uint64_t total_delay[nb_tx_queue];
+	uint64_t tx[nb_max_queue];
+	uint64_t rx[nb_max_queue];
+	uint64_t tx_dropped[nb_max_queue];
+	uint64_t total_delay[nb_max_queue];
+	uint64_t rx_thread[THREAD_NUM];
 } __rte_cache_aligned;
 struct delay_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 struct delay_port_statistics port_statistics_period[RTE_MAX_ETHPORTS];
@@ -85,10 +110,10 @@ calc_latency(uint16_t port, uint16_t qidx,
 		long time = (now.tv_sec - start->tv_sec) * 1e9 + now.tv_nsec - start->tv_nsec;
 		if (unlikely(time < 0)) {
 			printf("%ld %ld %ld %ld\n", now.tv_sec, now.tv_nsec, start->tv_sec, start->tv_nsec);
-			// within 100 us is acceptable
-		}
-		else if (time < 1000000) {
+		} else {
+			// maybe used by multi threads!
 			hdr_record_value(latency_hist, time * 10);
+			port_statistics[port].rx[qidx]++;
 		}
 		cycles += time;
 	}
@@ -102,8 +127,8 @@ static void
 print_stats(void) {
 	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx, total_delay;
 	uint64_t period_packets_dropped, period_packets_tx, period_packets_rx;
-
-	unsigned portid, queueid;
+	uint64_t rx_thread[THREAD_NUM];
+	unsigned portid, queueid, threadid;
 	uint64_t period = timer_period / rte_get_timer_hz();
 
 	const char clr[] = { 27, '[', '2', 'J', '\0' };
@@ -114,7 +139,7 @@ print_stats(void) {
 
 	printf("\nPort statistics ====================================");
 
-	for (portid = 0; portid < 1; portid++) {
+	for (portid = 0; portid < l2fwd_enabled_port_mask; portid++) {
 		total_packets_dropped = 0;
 		total_packets_tx = 0;
 		total_packets_rx = 0;
@@ -126,7 +151,7 @@ print_stats(void) {
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			break;
 		printf("\nStatistics for port %u ------------------------------", portid);
-		for (queueid = 0; queueid < nb_rx_queue; queueid++) {
+		for (queueid = 0; queueid < nb_max_queue; queueid++) {
 			total_packets_dropped += port_statistics[portid].tx_dropped[queueid];
 			total_packets_tx += port_statistics[portid].tx[queueid];
 			total_packets_rx += port_statistics[portid].rx[queueid];
@@ -134,7 +159,9 @@ print_stats(void) {
 			period_packets_dropped += port_statistics[portid].tx_dropped[queueid] - port_statistics_period[portid].tx_dropped[queueid];
 			period_packets_tx += port_statistics[portid].tx[queueid] - port_statistics_period[portid].tx[queueid];
 			period_packets_rx += port_statistics[portid].rx[queueid] - port_statistics_period[portid].rx[queueid];
-
+			for (threadid = 0; threadid < THREAD_NUM; threadid++) {
+				rx_thread[threadid] = port_statistics[portid].rx_thread[threadid] - port_statistics_period[portid].rx_thread[threadid];
+			}
 			printf("\n     Queue %u --------------------------------------"
 				"\n     Packets sent: %24" PRIu64
 				"\n     Packets received: %20" PRIu64
@@ -164,6 +191,11 @@ print_stats(void) {
 			period_packets_rx / period,
 			period_packets_dropped / period,
 			total_delay);
+		printf("\n");
+		for (threadid = 0; threadid < THREAD_NUM; threadid++) {
+			printf(" %ld", rx_thread[threadid]);
+		}
+
 		printf("\n====================================================\n");
 		memcpy(&port_statistics_period[portid], &port_statistics[portid], sizeof(port_statistics[portid]));
 	}
@@ -171,24 +203,156 @@ print_stats(void) {
 	fflush(stdout);
 }
 
+static void delay_receive_package(unsigned portid, struct lcore_queue_conf *qconf) {
+	unsigned i, j, queueid;
+	struct rte_mbuf *pkt[RECV_PKT_BURST];
+	while (!force_quit) {
+		for (i = 0; i < qconf->n_rx_queue; i++) {
+			queueid = qconf->rx_queue_list[i];
+
+			uint16_t nb_rx = rte_eth_rx_burst(portid, queueid,
+				pkt, RECV_PKT_BURST);
+			port_statistics[portid].rx[queueid] += nb_rx;
+			for (j = 0; j < nb_rx; j++) {
+				rte_pktmbuf_free(pkt[j]);
+			}
+		}
+	}
+}
+
 static void
 delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
-	unsigned i, j, queueid, total_send;
-	struct rte_mbuf *pkt[SEND_PKT_BURST];
+
+	unsigned i, j, queueid, pkt_id;
+	struct rte_mbuf *pkt[RECV_PKT_BURST];
 	struct rte_ether_hdr *eth_hdr;
 	struct rte_ipv4_hdr *ip_hdr;
 	struct rte_udp_hdr *udp_hdr;
 	uint16_t package_id = 0;
 
-	struct OBJECT_TEST *msg;
-	struct OBJECT_TEST object_test;
+	// struct OBJECT_TEST *msg;
+	// struct OBJECT_TEST object_test;
 	int pkt_size = sizeof(struct OBJECT_TEST) + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
+
+	int credits[THREAD_NUM];
+	for (int i = 0; i < THREAD_NUM; i++) {
+		credits[i] = THREAD_CREDITS;
+	}
+
+	while (!force_quit) {
+		for (i = 0; i < qconf->n_tx_queue; i++) {
+			queueid = qconf->tx_queue_list[i];
+			pkt_id = 0;
+			for (j = 0; j < THREAD_NUM; j++) {
+				if (1) {
+					credits[j]--;
+					pkt[pkt_id] = rte_pktmbuf_alloc(delay_pktmbuf_pool);
+					pkt[pkt_id]->l2_len = sizeof(struct rte_ether_hdr);
+					pkt[pkt_id]->l3_len = sizeof(struct rte_ipv4_hdr);
+					pkt[pkt_id]->l4_len = sizeof(struct rte_udp_hdr);
+					pkt[pkt_id]->ol_flags |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
+
+					eth_hdr = rte_pktmbuf_mtod(pkt[pkt_id], struct rte_ether_hdr *);
+					// eth_hdr->dst_addr = target_addrs[j % 1 + portid * THREAD_NUM];
+					eth_hdr->dst_addr = DST_ADDR;
+					// this is used for two ports!!
+					// eth_hdr->dst_addr.addr_bytes[5] += portid;
+					eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
+					eth_hdr->ether_type = RTE_BE16(0x0800);
+
+					ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+					ip_hdr->version_ihl = 0x45;
+					ip_hdr->type_of_service = 0;
+					ip_hdr->total_length = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ipv4_hdr));
+					ip_hdr->packet_id = RTE_BE16(package_id);
+					package_id++;
+					ip_hdr->fragment_offset = RTE_BE16(0);
+					ip_hdr->time_to_live = 64;
+					ip_hdr->next_proto_id = IPPROTO_UDP;
+					// ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+					// ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+
+					ip_hdr->src_addr = RTE_BE32(j);
+					ip_hdr->dst_addr = RTE_BE32(j);
+
+					udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
+					udp_hdr->dgram_len = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr));
+					// udp_hdr->src_port = RTE_BE16(1);
+					// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
+					udp_hdr->src_port = RTE_BE16(j);
+					udp_hdr->dst_port = RTE_BE16(j);
+					udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[pkt_id]->ol_flags);
+					ip_hdr->hdr_checksum = 0;
+
+					// msg = (struct OBJECT_TEST *)(udp_hdr + 1);
+					// memcpy(msg, &object_test, sizeof(object_test));
+
+					pkt[pkt_id]->data_len = pkt_size;
+					pkt[pkt_id]->pkt_len = pkt_size;
+
+					pkt_id++;
+				}
+			}
+			if (pkt_id > 0) {
+				uint16_t nb_tx = rte_eth_tx_burst(portid, queueid, pkt, pkt_id);
+				port_statistics[portid].tx[queueid] += nb_tx;
+				port_statistics[portid].tx_dropped[queueid] += pkt_id - nb_tx;
+				for (j = nb_tx; j < pkt_id; j++) {
+					rte_pktmbuf_free(pkt[j]);
+				}
+			}
+		}
+		uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
+		uint64_t timer_period_x_us = 45000;
+		prev_tsc = rte_rdtsc();
+		timer_tsc = 0;
+		while (!force_quit) {
+			cur_tsc = rte_rdtsc();
+
+			/*
+			 * TX burst queue drain
+			 */
+			diff_tsc = cur_tsc - prev_tsc;
+			/* if timer is enabled */
+			if (timer_period_x_us > 0) {
+
+				/* advance the timer */
+				timer_tsc += diff_tsc;
+
+				/* if timer has reached its timeout */
+				if (unlikely(timer_tsc >= timer_period_x_us)) {
+					break;
+				}
+			}
+			prev_tsc = cur_tsc;
+		}
+
+
+		// rte_delay_us_sleep(1);
+	}
+}
+
+static void
+test_delay(unsigned portid, struct lcore_queue_conf *qconf) {
+	unsigned i, j, tx_queueid, rx_queueid, total_send;
+	struct rte_mbuf *pkt[RECV_PKT_BURST];
+	struct rte_ether_hdr *eth_hdr;
+	struct rte_ipv4_hdr *ip_hdr;
+	struct rte_udp_hdr *udp_hdr;
+	uint16_t package_id = 0;
+
+	struct Object_22 *msg;
+	struct Object_22 object_test;
+	int pkt_size = sizeof(struct Object_22) + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
+	sleep(5);
+	printf("Start test delay\n");
+	tx_queueid = qconf->tx_queue_list[0];
+	rx_queueid = qconf->rx_queue_list[0];
 
 	while (!force_quit) {
 		total_send = 0;
 		for (i = 0; i < 1 && !force_quit; i++) {
-			queueid = qconf->tx_queue_list[0];
-			for (j = 0; j < SEND_PKT_BURST; j++) {
+			for (j = 0; j < 1; j++) {
 				pkt[j] = rte_pktmbuf_alloc(delay_pktmbuf_pool);
 				pkt[j]->l2_len = sizeof(struct rte_ether_hdr);
 				pkt[j]->l3_len = sizeof(struct rte_ipv4_hdr);
@@ -198,12 +362,14 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 				eth_hdr = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
 				eth_hdr->dst_addr = DST_ADDR;
 				eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
+				eth_hdr->src_addr.addr_bytes[4] = 1;
+				eth_hdr->src_addr.addr_bytes[5] = 1;
 				eth_hdr->ether_type = RTE_BE16(0x0800);
 
 				ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
 				ip_hdr->version_ihl = 0x45;
 				ip_hdr->type_of_service = 0;
-				ip_hdr->total_length = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ipv4_hdr));
+				ip_hdr->total_length = RTE_BE16(sizeof(struct Object_22) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ipv4_hdr));
 				ip_hdr->packet_id = RTE_BE16(package_id);
 				package_id++;
 				ip_hdr->fragment_offset = RTE_BE16(0);
@@ -212,14 +378,14 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 				// ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 				// ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 				// for static latency test, we use same addr and port
-				ip_hdr->src_addr = RTE_BE32(1);
-				ip_hdr->dst_addr = RTE_BE32(1);
+				ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+				ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 
 				// ip_hdr->src_addr = RTE_BE16(1);
 				// ip_hdr->dst_addr = RTE_BE16(1);
 
 				udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
-				udp_hdr->dgram_len = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr));
+				udp_hdr->dgram_len = RTE_BE16(sizeof(struct Object_22) + sizeof(struct rte_udp_hdr));
 				// udp_hdr->src_port = RTE_BE16(rte_rand_max(UINT16_MAX));
 				// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
 				udp_hdr->src_port = RTE_BE16(1);
@@ -230,31 +396,28 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 				udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[j]->ol_flags);
 				ip_hdr->hdr_checksum = 0;
 
-				msg = (struct OBJECT_TEST *)(udp_hdr + 1);
+				msg = (struct Object_22 *)(udp_hdr + 1);
 				memcpy(msg, &object_test, sizeof(object_test));
 
 				pkt[j]->data_len = pkt_size;
 				pkt[j]->pkt_len = pkt_size;
 			}
-			uint16_t nb_tx = rte_eth_tx_burst(portid, queueid, pkt, SEND_PKT_BURST);
-			port_statistics[portid].tx[queueid] += nb_tx;
-			port_statistics[portid].tx_dropped[queueid] += SEND_PKT_BURST - nb_tx;
+			uint16_t nb_tx = rte_eth_tx_burst(portid, tx_queueid, pkt, 1);
+			port_statistics[portid].tx[tx_queueid] += nb_tx;
+			port_statistics[portid].tx_dropped[tx_queueid] += 1 - nb_tx;
 			total_send += nb_tx;
-			for (j = nb_tx; j < SEND_PKT_BURST; j++) {
+			for (j = nb_tx; j < 1; j++) {
 				rte_pktmbuf_free(pkt[j]);
 			}
 		}
 		total_send = 1;
 		while (!force_quit && total_send > 0) {
-			for (i = 0; i < qconf->n_tx_queue; i++) {
-				queueid = qconf->tx_queue_list[i];
+			for (i = 0; i < qconf->n_rx_queue; i++) {
 
-				uint16_t nb_rx = rte_eth_rx_burst(portid, queueid,
+				uint16_t nb_rx = rte_eth_rx_burst(portid, rx_queueid,
 					pkt, RECV_PKT_BURST);
-
 				for (j = 0; j < nb_rx; j++) {
 					if (rte_pktmbuf_pkt_len(pkt[j]) == (uint32_t)RTE_MAX(60, pkt_size)) {
-						port_statistics[portid].rx[queueid]++;
 						total_send--;
 					}
 					rte_pktmbuf_free(pkt[j]);
@@ -320,9 +483,14 @@ l2fwd_main_loop(void) {
 
 	switch (qconf->type) {
 	case TRANSMIT_TYPE:
-		delay_send_package(0, qconf);
+		delay_send_package(qconf->port_id, qconf);
 		break;
-
+		// case RECEIVE_TYPE:
+		// 	delay_receive_package(qconf->port_id, qconf);
+		// 	break;
+	case DELAY_TYPE:
+		test_delay(qconf->port_id, qconf);
+		break;
 	default:
 		RTE_LOG(INFO, L2FWD, "illegal type %d\n", qconf->type);
 	}
@@ -332,8 +500,7 @@ static int
 l2fwd_launch_one_lcore(__rte_unused void *dummy) {
 	if (rte_lcore_id() == rte_get_main_lcore()) {
 		l2fwd_main_lcore_show_status();
-	}
-	else {
+	} else {
 		l2fwd_main_loop();
 	}
 	return 0;
@@ -350,7 +517,7 @@ check_all_ports_link_status(uint32_t port_mask) {
 	int ret;
 	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
-	printf("\nChecking link status");
+	printf("\nChecking link status\n");
 	fflush(stdout);
 	for (count = 0; count <= MAX_CHECK_TIME; count++) {
 		if (force_quit)
@@ -417,10 +584,10 @@ int main(int argc, char **argv) {
 	uint16_t nb_ports;
 	uint16_t nb_ports_available = 0;
 	uint16_t portid;
-	unsigned lcore_id, rx_lcore_id;
+	unsigned lcore_index, lcore_id;
 	unsigned int nb_lcores = 0;
 	unsigned int nb_mbufs;
-	int tx_queue_count = 0;
+	int tx_queue_count = 0, rx_queue_count = 0, delay_queue_count = 0;
 
 	/* init EAL */
 	ret = rte_eal_init(argc, argv);
@@ -446,7 +613,7 @@ int main(int argc, char **argv) {
 		rte_exit(EXIT_FAILURE, "Invalid portmask; possible (0x%x)\n",
 			(1 << nb_ports) - 1);
 
-	rx_lcore_id = 0;
+	lcore_id = 0;
 	qconf = NULL;
 
 	/* Initialize the port/queue configuration of each logical core */
@@ -477,39 +644,62 @@ int main(int argc, char **argv) {
 		/* skip ports that are not enabled */
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			continue;
-
 		nb_ports_available++;
-
-		while (tx_queue_count < nb_tx_queue) {
+		tx_queue_count = 0;
+		rx_queue_count = 0;
+		delay_queue_count = 0;
+		while (tx_queue_count < nb_tx_queue || rx_queue_count < nb_rx_queue || delay_queue_count < nb_delay_queue) {
 			/* get the lcore_id for this port */
-			while (rte_lcore_is_enabled(rx_lcore_id) == 0 || rx_lcore_id == rte_get_main_lcore() ||
-				lcore_queue_conf[rx_lcore_id].n_tx_queue ==
-				MAX_QUEUE_PER_LCORE) {
-				rx_lcore_id++;
-				if (rx_lcore_id >= RTE_MAX_LCORE)
+			while (rte_lcore_is_enabled(lcore_id) == 0 || lcore_id == rte_get_main_lcore() ||
+				lcore_queue_conf[lcore_id].n_tx_queue ==
+				MAX_QUEUE_PER_LCORE || lcore_queue_conf[lcore_id].n_rx_queue == MAX_QUEUE_PER_LCORE) {
+				lcore_id++;
+				if (lcore_id >= RTE_MAX_LCORE)
 					rte_exit(EXIT_FAILURE, "Not enough cores\n");
 			}
 
-			if (qconf != &lcore_queue_conf[rx_lcore_id]) {
+			if (qconf != &lcore_queue_conf[lcore_id]) {
 				/* Assigned a new logical core in the loop above. */
-				qconf = &lcore_queue_conf[rx_lcore_id];
+				qconf = &lcore_queue_conf[lcore_id];
 				nb_lcores++;
 			}
-			if (tx_queue_count == nb_tx_queue) {
+			if (tx_queue_count == nb_tx_queue && rx_queue_count == nb_rx_queue && delay_queue_count == nb_delay_queue) {
 				continue;
 			}
-
-			qconf->type = TRANSMIT_TYPE;
-			for (int i = 0; tx_queue_count < nb_tx_queue && i < MAX_QUEUE_PER_LCORE; i++) {
-				qconf->tx_queue_list[i] = tx_queue_count;
-				qconf->n_tx_queue++;
-				tx_queue_count++;
+			if (tx_queue_count < nb_tx_queue) {
+				qconf->type = TRANSMIT_TYPE;
+				for (int i = 0; tx_queue_count < nb_tx_queue && i < MAX_QUEUE_PER_LCORE; i++) {
+					qconf->tx_queue_list[i] = tx_queue_count;
+					qconf->n_tx_queue++;
+					tx_queue_count++;
+				}
+				qconf->port_id = portid;
+				printf("Lcore %u: [Transmit], port %u, queue from %d to %d\n", lcore_id, qconf->port_id, qconf->tx_queue_list[0], qconf->tx_queue_list[qconf->n_tx_queue - 1]);
+			} else if (rx_queue_count < nb_rx_queue) {
+				qconf->type = RECEIVE_TYPE;
+				for (int i = 0; rx_queue_count < nb_rx_queue && i < MAX_QUEUE_PER_LCORE; i++) {
+					qconf->rx_queue_list[i] = rx_queue_count;
+					qconf->n_rx_queue++;
+					rx_queue_count++;
+				}
+				qconf->port_id = portid;
+				printf("Lcore %u: [Receive], port %u, queue from %d to %d\n", lcore_id, qconf->port_id, qconf->rx_queue_list[0], qconf->rx_queue_list[qconf->n_rx_queue - 1]);
+			} else if (delay_queue_count < nb_delay_queue) {
+				qconf->type = DELAY_TYPE;
+				for (int i = 0; delay_queue_count < nb_delay_queue && i < MAX_QUEUE_PER_LCORE; i++) {
+					qconf->tx_queue_list[i] = nb_tx_queue + delay_queue_count;
+					qconf->n_tx_queue++;
+					qconf->rx_queue_list[i] = delay_queue_count;
+					qconf->n_rx_queue++;
+					delay_queue_count++;
+				}
+				qconf->port_id = portid;
+				printf("Lcore %u: [Delay], port %u, queue from %d to %d\n", lcore_id, qconf->port_id, qconf->tx_queue_list[0], qconf->tx_queue_list[qconf->n_tx_queue - 1]);
 			}
-			printf("Lcore %u: [Transmit], queue from %d to %d\n", rx_lcore_id, qconf->tx_queue_list[0], qconf->tx_queue_list[qconf->n_tx_queue - 1]);
 		}
 	}
 
-	nb_mbufs = nb_ports_available * (nb_rxd + nb_txd + SEND_PKT_BURST + RECV_PKT_BURST) * nb_lcores;
+	nb_mbufs = RTE_MIN(300000, NUM_MBUFS * nb_lcores);
 	/* create the mbuf pool */
 	delay_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
 		MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
@@ -543,7 +733,7 @@ int main(int argc, char **argv) {
 		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 			RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
-		ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue, &local_port_conf);
+		ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue + nb_delay_queue, &local_port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 				ret, portid);
@@ -556,7 +746,6 @@ int main(int argc, char **argv) {
 				ret, portid);
 
 		ret = rte_eth_promiscuous_disable(portid);
-		// ret = rte_eth_promiscuous_enable(portid);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 				"Can't set promiscuous: err=%d, port=%u\n",
@@ -582,7 +771,7 @@ int main(int argc, char **argv) {
 		txq_conf = dev_info.default_txconf;
 		txq_conf.offloads = local_port_conf.txmode.offloads;
 
-		for (int i = 0; i < nb_tx_queue; i++) {
+		for (int i = 0; i < nb_tx_queue + nb_delay_queue; i++) {
 			ret = rte_eth_tx_queue_setup(portid, i, nb_txd,
 				rte_eth_dev_socket_id(portid),
 				&txq_conf);
@@ -601,12 +790,13 @@ int main(int argc, char **argv) {
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",
 				ret, portid);
-
-		for (int i = 0; i < nb_rx_queue; i++) {
-			rte_eth_add_rx_callback(portid, i, calc_latency, NULL);
-		}
-		for (int i = 0; i < nb_tx_queue; i++) {
-			rte_eth_add_tx_callback(portid, i, add_timestamps, NULL);
+		if (CALC_LAT) {
+			for (int i = 0; i < nb_rx_queue; i++) {
+				rte_eth_add_rx_callback(portid, i, calc_latency, NULL);
+			}
+			for (int i = nb_tx_queue; i < nb_tx_queue + nb_delay_queue; i++) {
+				rte_eth_add_tx_callback(portid, i, add_timestamps, NULL);
+			}
 		}
 
 		/* initialize port stats */
@@ -624,10 +814,17 @@ int main(int argc, char **argv) {
 	init_hdr();
 
 	ret = 0;
+
+	struct rte_ether_addr target_addr = { {0x01, 0x01, 0x01, 0x01, 0x01, 0x01} };
+
+	for (size_t i = 0; i < 190; i++) {
+		target_addrs[i] = target_addr;
+		target_addr = increment_mac_address(target_addr);
+	}
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, NULL, CALL_MAIN);
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
-		if (rte_eal_wait_lcore(lcore_id) < 0) {
+	RTE_LCORE_FOREACH_WORKER(lcore_index) {
+		if (rte_eal_wait_lcore(lcore_index) < 0) {
 			ret = -1;
 			break;
 		}
@@ -648,7 +845,7 @@ int main(int argc, char **argv) {
 	/* clean up the EAL */
 	rte_eal_cleanup();
 	char filename[100];
-	sprintf(filename, "delay_%ld.txt", sizeof(struct OBJECT_TEST) + 42);
+	sprintf(filename, "bg_bw_c2s_%ld.txt", sizeof(struct OBJECT_TEST) + 42);
 	write_hdr_result(filename);
 	close_hdr();
 

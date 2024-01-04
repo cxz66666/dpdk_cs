@@ -51,6 +51,7 @@
 
 #define RECEIVE_TYPE 0
 #define TRANSMIT_TYPE 1
+#define DELAY_TYPE 2
 
 #define MEMPOOL_CACHE_SIZE 256
 
@@ -58,9 +59,17 @@
 // struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xee} };
 
 // bf2 bond0 mac addr
-struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xe6} };
+// struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xee} };
 // host2 mac addr
 // struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xde} };
+// host1 mac addr
+struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x32, 0x04, 0x30} };
+// host1 nic mode bond mac addr
+
+// struct rte_ether_addr DST_ADDR = { {0xf6, 0x72 , 0x1a, 0xed, 0xb7, 0x2d} };
+
+
+struct rte_ether_addr DST_DPA_ADDR = { {0x01, 0x01, 0x01, 0x01, 0x01, 0x01} };
 
 __attribute__((unused)) static uint8_t rss_key[40] = { 0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
                               0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3, 0x8f, 0xb0,
@@ -178,6 +187,10 @@ struct Object_1024 {
     uint8_t data[1024];
     /* data */
 } __rte_cache_aligned;
+
+struct Object_1_5k {
+    uint8_t data[1458];
+};
 
 struct Object_1472 {
     uint8_t data[1472];
