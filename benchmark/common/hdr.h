@@ -2,7 +2,7 @@
 #include <assert.h>
 struct hdr_histogram *latency_hist;
 void init_hdr() {
-    int ret = hdr_init(1, 1000 * 1000 * 10, 3,
+    int ret = hdr_init(1, 1000 * 1000 * 100, 3,
         &latency_hist);
     assert(ret == 0);
 }
@@ -23,3 +23,5 @@ bool write_hdr_result(char *filename) {
     hdr_reset(latency_hist);
     return true;
 }
+
+#define MAGIC_NUMBER 0xfffffffffffffffe
