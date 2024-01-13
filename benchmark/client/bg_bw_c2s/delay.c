@@ -29,7 +29,7 @@ static uint32_t NUM_MBUFS = 1024 * 8;
 // 如果只打流，nb_delay_queue设置成0
 // server的l2fwd使用15 threads
 #define nb_tx_queue 13
-#define nb_delay_queue 0
+#define nb_delay_queue 1
 #define nb_rx_queue nb_delay_queue
 #define nb_max_queue (nb_rx_queue > nb_tx_queue ? nb_rx_queue : nb_tx_queue)
 /* ethernet addresses of ports */
@@ -212,7 +212,6 @@ static void delay_receive_package(unsigned portid, struct lcore_queue_conf *qcon
 
 			uint16_t nb_rx = rte_eth_rx_burst(portid, queueid,
 				pkt, RECV_PKT_BURST);
-			port_statistics[portid].rx[queueid] += nb_rx;
 			for (j = 0; j < nb_rx; j++) {
 				rte_pktmbuf_free(pkt[j]);
 			}
