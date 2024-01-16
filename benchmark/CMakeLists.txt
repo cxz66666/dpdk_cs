@@ -47,7 +47,7 @@ endif ()
 
 
 #sub-project: HdrHistogram
-include_directories(${CMAKE_SOURCE_DIR}/HdrHistogram/include)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/HdrHistogram/include)
 
 include_directories("${LIBDPDK_INCLUDE_DIRS}")
 
@@ -55,7 +55,7 @@ include_directories("${CMAKE_SOURCE_DIR}/client/config")
 include_directories("${CMAKE_SOURCE_DIR}/common")
 
 
-add_subdirectory(${CMAKE_SOURCE_DIR}/HdrHistogram)
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/HdrHistogram)
 
 set(LIBRARIES ${LIBRARIES} PkgConfig::LIBDPDK hdr_histogram)
 
