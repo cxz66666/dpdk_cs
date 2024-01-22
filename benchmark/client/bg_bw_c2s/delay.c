@@ -29,9 +29,9 @@ static uint32_t NUM_MBUFS = 1024 * 8;
 // 如果只打流，nb_delay_queue设置成0
 // server的l2fwd使用15 threads
 #define nb_tx_queue 13
-#define nb_delay_queue 1
+#define nb_delay_queue 0
 #define nb_rx_queue nb_delay_queue
-#define nb_max_queue (nb_rx_queue > nb_tx_queue ? nb_rx_queue : nb_tx_queue)
+#define nb_max_queue (nb_rx_queue > (nb_delay_queue+ nb_tx_queue) ? nb_rx_queue : (nb_delay_queue+ nb_tx_queue))
 /* ethernet addresses of ports */
 static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
 
@@ -237,10 +237,24 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 	for (int i = 0; i < THREAD_NUM; i++) {
 		credits[i] = THREAD_CREDITS;
 	}
-
+	queueid = qconf->tx_queue_list[0];
+	uint32_t src_ip = 1;
+	uint32_t dst_ip = 1;
+	uint16_t src_port, dst_port = 1;
+	for (src_port = 0;src_port < UINT16_MAX;src_port++) {
+		union rte_thash_tuple tuple;
+		tuple.v4.src_addr = src_ip;
+		tuple.v4.dst_addr = dst_ip;
+		tuple.v4.sport = src_port;
+		tuple.v4.dport = dst_port;
+		uint32_t hash = rte_softrss((uint32_t *)&tuple, RTE_THASH_V4_L4_LEN, rss_key);
+		if (hash % 16 == queueid) {
+			break;
+		}
+	}
+	assert(src_port < UINT16_MAX);
 	while (!force_quit) {
 		for (i = 0; i < qconf->n_tx_queue; i++) {
-			queueid = qconf->tx_queue_list[i];
 			pkt_id = 0;
 			for (j = 0; j < THREAD_NUM; j++) {
 				if (1) {
@@ -271,15 +285,15 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 					// ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 					// ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 
-					ip_hdr->src_addr = RTE_BE32(j);
-					ip_hdr->dst_addr = RTE_BE32(j);
+					ip_hdr->src_addr = RTE_BE32(src_ip);
+					ip_hdr->dst_addr = RTE_BE32(dst_ip);
 
 					udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
 					udp_hdr->dgram_len = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr));
 					// udp_hdr->src_port = RTE_BE16(1);
 					// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-					udp_hdr->src_port = RTE_BE16(j);
-					udp_hdr->dst_port = RTE_BE16(j);
+					udp_hdr->src_port = RTE_BE16(src_port);
+					udp_hdr->dst_port = RTE_BE16(dst_port);
 					udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[pkt_id]->ol_flags);
 					ip_hdr->hdr_checksum = 0;
 
@@ -325,9 +339,6 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 			}
 			prev_tsc = cur_tsc;
 		}
-
-
-		// rte_delay_us_sleep(1);
 	}
 }
 
@@ -347,6 +358,20 @@ test_delay(unsigned portid, struct lcore_queue_conf *qconf) {
 	printf("Start test delay\n");
 	tx_queueid = qconf->tx_queue_list[0];
 	rx_queueid = qconf->rx_queue_list[0];
+	uint32_t src_ip = 1;
+	uint32_t dst_ip = 1;
+	uint16_t src_port, dst_port = 1;
+	for (src_port = 0;src_port < UINT16_MAX;src_port++) {
+		union rte_thash_tuple tuple;
+		tuple.v4.src_addr = src_ip;
+		tuple.v4.dst_addr = dst_ip;
+		tuple.v4.sport = src_port;
+		tuple.v4.dport = dst_port;
+		uint32_t hash = rte_softrss((uint32_t *)&tuple, RTE_THASH_V4_L4_LEN, rss_key);
+		if (hash % 16 == tx_queueid) {
+			break;
+		}
+	}
 
 	while (!force_quit) {
 		total_send = 0;
@@ -361,8 +386,6 @@ test_delay(unsigned portid, struct lcore_queue_conf *qconf) {
 				eth_hdr = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
 				eth_hdr->dst_addr = DST_ADDR;
 				eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
-				eth_hdr->src_addr.addr_bytes[4] = 1;
-				eth_hdr->src_addr.addr_bytes[5] = 1;
 				eth_hdr->ether_type = RTE_BE16(0x0800);
 
 				ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
@@ -372,13 +395,13 @@ test_delay(unsigned portid, struct lcore_queue_conf *qconf) {
 				ip_hdr->packet_id = RTE_BE16(package_id);
 				package_id++;
 				ip_hdr->fragment_offset = RTE_BE16(0);
-				ip_hdr->time_to_live = 64;
+				ip_hdr->time_to_live = 60;
 				ip_hdr->next_proto_id = IPPROTO_UDP;
 				// ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 				// ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 				// for static latency test, we use same addr and port
-				ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
-				ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+				ip_hdr->src_addr = RTE_BE32(src_ip);
+				ip_hdr->dst_addr = RTE_BE32(dst_ip);
 
 				// ip_hdr->src_addr = RTE_BE16(1);
 				// ip_hdr->dst_addr = RTE_BE16(1);
@@ -387,8 +410,8 @@ test_delay(unsigned portid, struct lcore_queue_conf *qconf) {
 				udp_hdr->dgram_len = RTE_BE16(sizeof(struct Object_22) + sizeof(struct rte_udp_hdr));
 				// udp_hdr->src_port = RTE_BE16(rte_rand_max(UINT16_MAX));
 				// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-				udp_hdr->src_port = RTE_BE16(1);
-				udp_hdr->dst_port = RTE_BE16(1);
+				udp_hdr->src_port = RTE_BE16(src_port);
+				udp_hdr->dst_port = RTE_BE16(dst_port);
 
 				// udp_hdr->src_port = RTE_BE16(1);
 				// udp_hdr->dst_port = RTE_BE16(1);
@@ -423,7 +446,7 @@ test_delay(unsigned portid, struct lcore_queue_conf *qconf) {
 				}
 			}
 		}
-		// rte_delay_us_sleep(1000);
+		// rte_delay_us_block(10);
 	}
 }
 
@@ -697,108 +720,111 @@ int main(int argc, char **argv) {
 			}
 		}
 	}
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		delay_pktmbuf_pool = rte_mempool_lookup(MEMPOOL_NAME);
+	} else {
+		nb_mbufs = RTE_MIN(300000, NUM_MBUFS * nb_lcores);
+		/* create the mbuf pool */
+		delay_pktmbuf_pool = rte_pktmbuf_pool_create(MEMPOOL_NAME, nb_mbufs,
+			MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+			rte_socket_id());
+		if (delay_pktmbuf_pool == NULL)
+			rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
 
-	nb_mbufs = RTE_MIN(300000, NUM_MBUFS * nb_lcores);
-	/* create the mbuf pool */
-	delay_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
-		MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
-		rte_socket_id());
-	if (delay_pktmbuf_pool == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
+		/* Initialise each port */
+		RTE_ETH_FOREACH_DEV(portid) {
+			struct rte_eth_rxconf rxq_conf;
+			struct rte_eth_txconf txq_conf;
+			struct rte_eth_conf local_port_conf = port_conf;
+			struct rte_eth_dev_info dev_info;
 
-	/* Initialise each port */
-	RTE_ETH_FOREACH_DEV(portid) {
-		struct rte_eth_rxconf rxq_conf;
-		struct rte_eth_txconf txq_conf;
-		struct rte_eth_conf local_port_conf = port_conf;
-		struct rte_eth_dev_info dev_info;
+			/* skip ports that are not enabled */
+			if ((l2fwd_enabled_port_mask & (1 << portid)) == 0) {
+				printf("Skipping disabled port %u\n", portid);
+				continue;
+			}
 
-		/* skip ports that are not enabled */
-		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0) {
-			printf("Skipping disabled port %u\n", portid);
-			continue;
-		}
+			/* init port */
+			printf("Initializing port %u... ", portid);
+			fflush(stdout);
 
-		/* init port */
-		printf("Initializing port %u... ", portid);
-		fflush(stdout);
+			ret = rte_eth_dev_info_get(portid, &dev_info);
+			if (ret != 0)
+				rte_exit(EXIT_FAILURE,
+					"Error during getting device (port %u) info: %s\n",
+					portid, strerror(-ret));
 
-		ret = rte_eth_dev_info_get(portid, &dev_info);
-		if (ret != 0)
-			rte_exit(EXIT_FAILURE,
-				"Error during getting device (port %u) info: %s\n",
-				portid, strerror(-ret));
-
-		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
-			local_port_conf.txmode.offloads |=
-			RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
-		ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue + nb_delay_queue, &local_port_conf);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
-				ret, portid);
-
-		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
-			&nb_txd);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-				"Cannot adjust number of descriptors: err=%d, port=%u\n",
-				ret, portid);
-
-		ret = rte_eth_promiscuous_disable(portid);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-				"Can't set promiscuous: err=%d, port=%u\n",
-				ret, portid);
-
-		/* init RX queue */
-		fflush(stdout);
-		rxq_conf = dev_info.default_rxconf;
-		rxq_conf.offloads = local_port_conf.rxmode.offloads;
-
-		for (int i = 0; i < nb_rx_queue; i++) {
-			ret = rte_eth_rx_queue_setup(portid, i, nb_rxd,
-				rte_eth_dev_socket_id(portid),
-				&rxq_conf,
-				delay_pktmbuf_pool);
+			if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
+				local_port_conf.txmode.offloads |=
+				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+			ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue + nb_delay_queue, &local_port_conf);
 			if (ret < 0)
-				rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup:err=%d, port=%u\n",
+				rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 					ret, portid);
-		}
 
-		/* init TX queue*/
-		fflush(stdout);
-		txq_conf = dev_info.default_txconf;
-		txq_conf.offloads = local_port_conf.txmode.offloads;
-
-		for (int i = 0; i < nb_tx_queue + nb_delay_queue; i++) {
-			ret = rte_eth_tx_queue_setup(portid, i, nb_txd,
-				rte_eth_dev_socket_id(portid),
-				&txq_conf);
+			ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
+				&nb_txd);
 			if (ret < 0)
-				rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
+				rte_exit(EXIT_FAILURE,
+					"Cannot adjust number of descriptors: err=%d, port=%u\n",
 					ret, portid);
-		}
 
-		ret = rte_eth_dev_set_ptypes(portid, RTE_PTYPE_UNKNOWN, NULL,
-			0);
-		if (ret < 0)
-			printf("Port %u, Failed to disable Ptype parsing\n",
-				portid);
-		/* Start device */
-		ret = rte_eth_dev_start(portid);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",
-				ret, portid);
-		if (CALC_LAT) {
+			ret = rte_eth_promiscuous_disable(portid);
+			if (ret < 0)
+				rte_exit(EXIT_FAILURE,
+					"Can't set promiscuous: err=%d, port=%u\n",
+					ret, portid);
+
+			/* init RX queue */
+			fflush(stdout);
+			rxq_conf = dev_info.default_rxconf;
+			rxq_conf.offloads = local_port_conf.rxmode.offloads;
+
 			for (int i = 0; i < nb_rx_queue; i++) {
-				rte_eth_add_rx_callback(portid, i, calc_latency, NULL);
+				ret = rte_eth_rx_queue_setup(portid, i, nb_rxd,
+					rte_eth_dev_socket_id(portid),
+					&rxq_conf,
+					delay_pktmbuf_pool);
+				if (ret < 0)
+					rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup:err=%d, port=%u\n",
+						ret, portid);
 			}
-			for (int i = nb_tx_queue; i < nb_tx_queue + nb_delay_queue; i++) {
-				rte_eth_add_tx_callback(portid, i, add_timestamps, NULL);
+
+			/* init TX queue*/
+			fflush(stdout);
+			txq_conf = dev_info.default_txconf;
+			txq_conf.offloads = local_port_conf.txmode.offloads;
+
+			for (int i = 0; i < nb_tx_queue + nb_delay_queue; i++) {
+				ret = rte_eth_tx_queue_setup(portid, i, nb_txd,
+					rte_eth_dev_socket_id(portid),
+					&txq_conf);
+				if (ret < 0)
+					rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
+						ret, portid);
 			}
+
+			ret = rte_eth_dev_set_ptypes(portid, RTE_PTYPE_UNKNOWN, NULL,
+				0);
+			if (ret < 0)
+				printf("Port %u, Failed to disable Ptype parsing\n",
+					portid);
+			/* Start device */
+			ret = rte_eth_dev_start(portid);
+			if (ret < 0)
+				rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",
+					ret, portid);
+			if (CALC_LAT) {
+				for (int i = 0; i < nb_rx_queue; i++) {
+					rte_eth_add_rx_callback(portid, i, calc_latency, NULL);
+				}
+				for (int i = nb_tx_queue; i < nb_tx_queue + nb_delay_queue; i++) {
+					rte_eth_add_tx_callback(portid, i, add_timestamps, NULL);
+				}
+			}
+			/* initialize port stats */
 		}
 
-		/* initialize port stats */
 	}
 	memset(&port_statistics, 0, sizeof(port_statistics));
 	memset(&port_statistics_period, 0, sizeof(port_statistics_period));
@@ -808,7 +834,9 @@ int main(int argc, char **argv) {
 			"All available ports are disabled. Please set portmask.\n");
 	}
 
-	check_all_ports_link_status(l2fwd_enabled_port_mask);
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+		check_all_ports_link_status(l2fwd_enabled_port_mask);
+	}
 
 	init_hdr();
 
@@ -828,21 +856,23 @@ int main(int argc, char **argv) {
 			break;
 		}
 	}
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+		RTE_ETH_FOREACH_DEV(portid) {
+			if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
+				continue;
+			printf("Closing port %d...", portid);
+			ret = rte_eth_dev_stop(portid);
+			if (ret != 0)
+				printf("rte_eth_dev_stop: err=%d, port=%d\n",
+					ret, portid);
+			rte_eth_dev_close(portid);
+			printf(" Done\n");
+		}
 
-	RTE_ETH_FOREACH_DEV(portid) {
-		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
-			continue;
-		printf("Closing port %d...", portid);
-		ret = rte_eth_dev_stop(portid);
-		if (ret != 0)
-			printf("rte_eth_dev_stop: err=%d, port=%d\n",
-				ret, portid);
-		rte_eth_dev_close(portid);
-		printf(" Done\n");
+		/* clean up the EAL */
+		rte_eal_cleanup();
+
 	}
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
 	char filename[100];
 	sprintf(filename, "bg_bw_c2s_%ld.txt", sizeof(struct OBJECT_TEST) + 42);
 	write_hdr_result(filename);

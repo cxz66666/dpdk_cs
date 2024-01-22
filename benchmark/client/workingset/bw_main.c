@@ -562,7 +562,7 @@ int main(int argc, char **argv) {
 
     nb_mbufs = nb_ports_available * (nb_rxd + nb_txd + MEMPOOL_CACHE_SIZE * 1.5) * nb_lcores;
     /* create the mbuf pool */
-    delay_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
+    delay_pktmbuf_pool = rte_pktmbuf_pool_create(MEMPOOL_NAME, nb_mbufs,
         MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
         rte_socket_id());
     if (delay_pktmbuf_pool == NULL)

@@ -216,6 +216,22 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 	if (queueid == nb_tx_queue - 1) {
 		return;
 	}
+	queueid = qconf->tx_queue_list[0];
+	uint32_t src_ip = 1;
+	uint32_t dst_ip = 1;
+	uint16_t src_port, dst_port = 1;
+	for (src_port = 0;src_port < UINT16_MAX;src_port++) {
+		union rte_thash_tuple tuple;
+		tuple.v4.src_addr = src_ip;
+		tuple.v4.dst_addr = dst_ip;
+		tuple.v4.sport = src_port;
+		tuple.v4.dport = dst_port;
+		uint32_t hash = rte_softrss((uint32_t *)&tuple, RTE_THASH_V4_L4_LEN, rss_key);
+		if (hash % 16 == queueid) {
+			break;
+		}
+	}
+
 	while (!force_quit) {
 		for (i = 0; i < qconf->n_tx_queue; i++) {
 			pkt_id = 0;
@@ -248,15 +264,15 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 					// ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 					// ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 
-					ip_hdr->src_addr = RTE_BE32(j);
-					ip_hdr->dst_addr = RTE_BE32(j);
+					ip_hdr->src_addr = RTE_BE32(src_ip);
+					ip_hdr->dst_addr = RTE_BE32(dst_ip);
 
 					udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
 					udp_hdr->dgram_len = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr));
 					// udp_hdr->src_port = RTE_BE16(1);
 					// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-					udp_hdr->src_port = RTE_BE16(j);
-					udp_hdr->dst_port = RTE_BE16(j);
+					udp_hdr->src_port = RTE_BE16(src_port);
+					udp_hdr->dst_port = RTE_BE16(dst_port);
 					udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[pkt_id]->ol_flags);
 					ip_hdr->hdr_checksum = 0;
 
@@ -279,7 +295,7 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 			}
 		}
 		uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
-		uint64_t timer_period_x_us = 300000;
+		uint64_t timer_period_x_us = 30000;
 		prev_tsc = rte_rdtsc();
 		timer_tsc = 0;
 		while (!force_quit) {
@@ -305,102 +321,6 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 
 
 		// rte_delay_us_sleep(1);
-	}
-}
-
-static void
-test_delay(unsigned portid, struct lcore_queue_conf *qconf) {
-	unsigned i, j, tx_queueid, rx_queueid, total_send;
-	struct rte_mbuf *pkt[RECV_PKT_BURST];
-	struct rte_ether_hdr *eth_hdr;
-	struct rte_ipv4_hdr *ip_hdr;
-	struct rte_udp_hdr *udp_hdr;
-	uint16_t package_id = 0;
-
-	struct Object_22 *msg;
-	struct Object_22 object_test;
-	int pkt_size = sizeof(struct Object_22) + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
-	sleep(5);
-	printf("Start test delay\n");
-	tx_queueid = qconf->tx_queue_list[0];
-	rx_queueid = qconf->rx_queue_list[0];
-
-	while (!force_quit) {
-		total_send = 0;
-		for (i = 0; i < 1 && !force_quit; i++) {
-			for (j = 0; j < 1; j++) {
-				pkt[j] = rte_pktmbuf_alloc(delay_pktmbuf_pool);
-				pkt[j]->l2_len = sizeof(struct rte_ether_hdr);
-				pkt[j]->l3_len = sizeof(struct rte_ipv4_hdr);
-				pkt[j]->l4_len = sizeof(struct rte_udp_hdr);
-				pkt[j]->ol_flags |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
-
-				eth_hdr = rte_pktmbuf_mtod(pkt[j], struct rte_ether_hdr *);
-				eth_hdr->dst_addr = DST_ADDR;
-				eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
-				eth_hdr->src_addr.addr_bytes[4] = 1;
-				eth_hdr->src_addr.addr_bytes[5] = 1;
-				eth_hdr->ether_type = RTE_BE16(0x0800);
-
-				ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
-				ip_hdr->version_ihl = 0x45;
-				ip_hdr->type_of_service = 0;
-				ip_hdr->total_length = RTE_BE16(sizeof(struct Object_22) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ipv4_hdr));
-				ip_hdr->packet_id = RTE_BE16(package_id);
-				package_id++;
-				ip_hdr->fragment_offset = RTE_BE16(0);
-				ip_hdr->time_to_live = 64;
-				ip_hdr->next_proto_id = IPPROTO_UDP;
-				// ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
-				// ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
-				// for static latency test, we use same addr and port
-				ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
-				ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
-
-				// ip_hdr->src_addr = RTE_BE16(1);
-				// ip_hdr->dst_addr = RTE_BE16(1);
-
-				udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
-				udp_hdr->dgram_len = RTE_BE16(sizeof(struct Object_22) + sizeof(struct rte_udp_hdr));
-				// udp_hdr->src_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-				// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-				udp_hdr->src_port = RTE_BE16(1);
-				udp_hdr->dst_port = RTE_BE16(1);
-
-				// udp_hdr->src_port = RTE_BE16(1);
-				// udp_hdr->dst_port = RTE_BE16(1);
-				udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[j]->ol_flags);
-				ip_hdr->hdr_checksum = 0;
-
-				msg = (struct Object_22 *)(udp_hdr + 1);
-				memcpy(msg, &object_test, sizeof(object_test));
-
-				pkt[j]->data_len = pkt_size;
-				pkt[j]->pkt_len = pkt_size;
-			}
-			uint16_t nb_tx = rte_eth_tx_burst(portid, tx_queueid, pkt, 1);
-			port_statistics[portid].tx[tx_queueid] += nb_tx;
-			port_statistics[portid].tx_dropped[tx_queueid] += 1 - nb_tx;
-			total_send += nb_tx;
-			for (j = nb_tx; j < 1; j++) {
-				rte_pktmbuf_free(pkt[j]);
-			}
-		}
-		total_send = 1;
-		while (!force_quit && total_send > 0) {
-			for (i = 0; i < qconf->n_rx_queue; i++) {
-
-				uint16_t nb_rx = rte_eth_rx_burst(portid, rx_queueid,
-					pkt, RECV_PKT_BURST);
-				for (j = 0; j < nb_rx; j++) {
-					if (rte_pktmbuf_pkt_len(pkt[j]) == (uint32_t)RTE_MAX(60, pkt_size)) {
-						total_send--;
-					}
-					rte_pktmbuf_free(pkt[j]);
-				}
-			}
-		}
-		// rte_delay_us_sleep(1000);
 	}
 }
 
@@ -662,7 +582,7 @@ int main(int argc, char **argv) {
 
 	nb_mbufs = RTE_MIN(300000, NUM_MBUFS * nb_lcores);
 	/* create the mbuf pool */
-	delay_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
+	delay_pktmbuf_pool = rte_pktmbuf_pool_create(MEMPOOL_NAME, nb_mbufs,
 		MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
 		rte_socket_id());
 	if (delay_pktmbuf_pool == NULL)

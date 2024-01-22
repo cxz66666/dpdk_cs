@@ -39,6 +39,7 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
+#include <rte_thash.h>
 
 #define RTE_TEST_RX_DESC_DEFAULT 8192
 #define RTE_TEST_TX_DESC_DEFAULT 8192
@@ -69,6 +70,8 @@ struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x32, 0x04, 0x30} };
 
 
 struct rte_ether_addr DST_DPA_ADDR = { {0x01, 0x01, 0x01, 0x01, 0x01, 0x01} };
+
+const char *MEMPOOL_NAME = "mbuf_pool";
 
 __attribute__((unused)) static uint8_t rss_key[40] = { 0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
                               0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3, 0x8f, 0xb0,

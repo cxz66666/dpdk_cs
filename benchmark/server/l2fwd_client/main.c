@@ -39,6 +39,7 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
+#include <rte_thash.h>
 
 #include <hdr.h>
 
@@ -75,7 +76,7 @@ static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
 /* mask of enabled ports */
 static uint32_t l2fwd_enabled_port_mask = 1;
 
-#define TX_RX_QUEUE 14
+#define TX_RX_QUEUE 16
 
 #define DELAY_QUEUE 0
 // 如果设置了delay_queue，请务必将CALC_LAT设为1
@@ -412,9 +413,6 @@ l2fwd_main_loop(void) {
 			for (j = sent; j < nb_rx; j++) {
 				rte_pktmbuf_free(pkts_burst[j]);
 			}
-			port_statistics[port_id].tx[queueid] += sent;
-			port_statistics[port_id].tx_dropped[queueid] += nb_rx - sent;
-
 		}
 	}
 }
@@ -433,8 +431,23 @@ test_delay(unsigned portid) {
 	int pkt_size = sizeof(struct Object_22) + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
 	sleep(5);
 	printf("Start test delay\n");
-	tx_queueid = 0;
+	tx_queueid = 13;
 	struct rte_ether_addr DST_ADDR = { {0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xde} };
+
+	uint32_t src_ip = 1;
+	uint32_t dst_ip = 1;
+	uint16_t src_port, dst_port = 1;
+	for (src_port = 0;src_port < UINT16_MAX;src_port++) {
+		union rte_thash_tuple tuple;
+		tuple.v4.src_addr = src_ip;
+		tuple.v4.dst_addr = dst_ip;
+		tuple.v4.sport = src_port;
+		tuple.v4.dport = dst_port;
+		uint32_t hash = rte_softrss((uint32_t *)&tuple, RTE_THASH_V4_L4_LEN, rss_key);
+		if (hash % 16 == 13) {
+			break;
+		}
+	}
 
 	while (!force_quit) {
 		for (i = 0; i < 1 && !force_quit; i++) {
@@ -462,8 +475,8 @@ test_delay(unsigned portid) {
 				// ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 				// ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 				// for static latency test, we use same addr and port
-				ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
-				ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+				ip_hdr->src_addr = RTE_BE32(src_ip);
+				ip_hdr->dst_addr = RTE_BE32(dst_ip);
 
 				// ip_hdr->src_addr = RTE_BE16(1);
 				// ip_hdr->dst_addr = RTE_BE16(1);
@@ -472,8 +485,8 @@ test_delay(unsigned portid) {
 				udp_hdr->dgram_len = RTE_BE16(sizeof(struct Object_22) + sizeof(struct rte_udp_hdr));
 				// udp_hdr->src_port = RTE_BE16(rte_rand_max(UINT16_MAX));
 				// udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-				udp_hdr->src_port = RTE_BE16(1);
-				udp_hdr->dst_port = RTE_BE16(1);
+				udp_hdr->src_port = RTE_BE16(src_port);
+				udp_hdr->dst_port = RTE_BE16(dst_port);
 
 				// udp_hdr->src_port = RTE_BE16(1);
 				// udp_hdr->dst_port = RTE_BE16(1);
