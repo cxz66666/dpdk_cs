@@ -22,7 +22,7 @@ static uint16_t nb_txd = 1024;
 #define nb_rx_queue 1
 #define nb_tx_queue 1
 
-static unsigned int SEND_QUEUE_OFFSET = 13;
+static unsigned int SEND_QUEUE_OFFSET = 0;
 
 /* ethernet addresses of ports */
 static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];

@@ -244,8 +244,7 @@ static void send_initial_packet(uint16_t portid, unsigned int queueid) {
 	if (nb_tx != DPA_THREAD_NUM) {
 		force_quit = true;
 		printf("send error, ready to quit\n");
-	}
-	else {
+	} else {
 		printf("send success!\n");
 	}
 }
@@ -352,20 +351,17 @@ l2fwd_main_loop(void) {
 				}
 
 				sent = rte_eth_tx_burst(port_id, queueid, pkts_burst, nb_rx);
-			}
-			else {
+			} else {
 				if (DO_DPA_REFACTOR) {
 					for (j = 0; j < nb_rx; j++) {
 						if (l2fwd_dpa_mac_updating(pkts_burst[j], port_id)) {
 							rte_eth_tx_burst(port_id, queueid, pkts_burst + j, 1);
 							port_statistics[port_id].tx[queueid]++;
-						}
-						else {
+						} else {
 							rte_pktmbuf_free(pkts_burst[j]);
 						}
 					}
-				}
-				else {
+				} else {
 					sent = 0;
 				}
 			}
@@ -385,8 +381,7 @@ l2fwd_launch_one_lcore(__rte_unused void *dummy) {
 
 	if (rte_lcore_id() == rte_get_main_lcore()) {
 		l2fwd_main_lcore_show_status();
-	}
-	else {
+	} else {
 		l2fwd_main_loop();
 	}
 	return 0;
