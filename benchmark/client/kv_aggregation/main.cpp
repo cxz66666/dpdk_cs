@@ -3,21 +3,22 @@
  */
 
 #include "config.h"
+#include "kv_aggregation.h"
 #include <hdr.h>
-
 static volatile bool force_quit;
-
-#define OBJECT_TEST Object_1k
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
 #define RECV_PKT_BURST 256
 
-#define THREAD_NUM 64
+#define THREAD_NUM 189
 
-#define THREAD_CREDITS 16
+#define ELEMENT_NUM 32
 
-#define CALC_LAT 0
+#define UNIFORM_KEY_NUMBER 256
+
+#define USE_DATASET 0
+
 /*
  * Configurable number of RX/TX ring descriptors
  */
@@ -25,8 +26,8 @@ static uint16_t nb_rxd = 1024;
 static uint16_t nb_txd = 1024;
 static uint32_t NUM_MBUFS = 1024 * 8;
 
-#define nb_tx_queue 8
-#define nb_rx_queue 4
+#define nb_tx_queue 12
+#define nb_rx_queue 0
 #define nb_max_queue (nb_rx_queue > nb_tx_queue ? nb_rx_queue : nb_tx_queue)
 /* ethernet addresses of ports */
 static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -40,7 +41,7 @@ struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
 static struct rte_eth_conf port_conf;
 
-struct rte_mempool *delay_pktmbuf_pool = NULL;
+struct rte_mempool *kv_client_pktmbuf_pool = NULL;
 
 /* Per-port statistics struct */
 struct delay_port_statistics {
@@ -55,6 +56,10 @@ struct delay_port_statistics port_statistics_period[RTE_MAX_ETHPORTS];
 
 /* A tsc-based timer responsible for triggering statistics printout */
 static uint64_t timer_period = 1; /* default period is 1 seconds */
+
+std::vector<kv_element>kv_elements;
+
+std::string file_path = "/home/cxz/study/dpdk_cs/benchmark/third_party/yelp_dataset/yelp_academic_result_cool.txt";
 
 /* Print out statistics on packets tx_dropped */
 static void
@@ -137,7 +142,7 @@ print_stats(void) {
     fflush(stdout);
 }
 
-static void delay_receive_package(unsigned portid, struct lcore_queue_conf *qconf) {
+static void receive_package(unsigned portid, struct lcore_queue_conf *qconf) {
     unsigned i, j, queueid;
     struct rte_mbuf *pkt[RECV_PKT_BURST];
     while (!force_quit) {
@@ -155,7 +160,7 @@ static void delay_receive_package(unsigned portid, struct lcore_queue_conf *qcon
 }
 
 static void
-delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
+send_package(unsigned portid, struct lcore_queue_conf *qconf) {
 
     unsigned i, j, queueid, pkt_id;
     struct rte_mbuf *pkt[RECV_PKT_BURST];
@@ -164,68 +169,69 @@ delay_send_package(unsigned portid, struct lcore_queue_conf *qconf) {
     struct rte_udp_hdr *udp_hdr;
     uint16_t package_id = 0;
 
-    // struct OBJECT_TEST *msg;
-    // struct OBJECT_TEST object_test;
-    int pkt_size = sizeof(struct OBJECT_TEST) + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr);
-
-    int credits[THREAD_NUM];
-    for (int i = 0; i < THREAD_NUM; i++) {
-        credits[i] = THREAD_CREDITS;
-    }
-
+    size_t total_element_num = kv_elements.size();
+    size_t now_element_num = 0;
     while (!force_quit) {
         for (i = 0; i < qconf->n_tx_queue; i++) {
             queueid = qconf->tx_queue_list[i];
             pkt_id = 0;
             for (j = 0; j < THREAD_NUM; j++) {
-                if (1) {
-                    credits[j]--;
-                    pkt[pkt_id] = rte_pktmbuf_alloc(delay_pktmbuf_pool);
-                    pkt[pkt_id]->l2_len = sizeof(struct rte_ether_hdr);
-                    pkt[pkt_id]->l3_len = sizeof(struct rte_ipv4_hdr);
-                    pkt[pkt_id]->l4_len = sizeof(struct rte_udp_hdr);
-                    pkt[pkt_id]->ol_flags |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
+                size_t element_num = ELEMENT_NUM;
+                int pkt_size = 64 + sizeof(kv_element) * element_num;
+                pkt[pkt_id] = rte_pktmbuf_alloc(kv_client_pktmbuf_pool);
+                pkt[pkt_id]->l2_len = sizeof(struct rte_ether_hdr);
+                pkt[pkt_id]->l3_len = sizeof(struct rte_ipv4_hdr);
+                pkt[pkt_id]->l4_len = sizeof(struct rte_udp_hdr);
+                pkt[pkt_id]->ol_flags |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
 
-                    eth_hdr = rte_pktmbuf_mtod(pkt[pkt_id], struct rte_ether_hdr *);
-                    eth_hdr->dst_addr = target_addrs[j % 189 + portid * THREAD_NUM];
-                    // eth_hdr->dst_addr = DST_ADDR;
-                    // this is used for two ports!!
-                    // eth_hdr->dst_addr.addr_bytes[5] += portid;
-                    eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
-                    eth_hdr->ether_type = RTE_BE16(0x0800);
+                eth_hdr = rte_pktmbuf_mtod(pkt[pkt_id], struct rte_ether_hdr *);
+                eth_hdr->dst_addr = target_addrs[j % 189 + portid * THREAD_NUM];
+                // eth_hdr->dst_addr = DST_ADDR;
+                eth_hdr->src_addr = l2fwd_ports_eth_addr[portid];
+                eth_hdr->ether_type = RTE_BE16(0x0800);
 
-                    ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
-                    ip_hdr->version_ihl = 0x45;
-                    ip_hdr->type_of_service = 0;
-                    ip_hdr->total_length = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr) + sizeof(struct rte_ipv4_hdr));
-                    ip_hdr->packet_id = RTE_BE16(package_id);
-                    package_id++;
-                    ip_hdr->fragment_offset = RTE_BE16(0);
-                    ip_hdr->time_to_live = 64;
-                    ip_hdr->next_proto_id = IPPROTO_UDP;
-                    // ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
-                    // ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+                ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+                ip_hdr->version_ihl = 0x45;
+                ip_hdr->type_of_service = 0;
+                ip_hdr->total_length = pkt_size - sizeof(struct rte_ether_hdr);
+                ip_hdr->packet_id = RTE_BE16(package_id);
+                package_id++;
+                ip_hdr->fragment_offset = RTE_BE16(0);
+                ip_hdr->time_to_live = 64;
+                ip_hdr->next_proto_id = IPPROTO_UDP;
+                // ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+                // ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
 
-                    ip_hdr->src_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
-                    ip_hdr->dst_addr = RTE_BE32(rte_rand_max(UINT32_MAX));
+                ip_hdr->src_addr = RTE_BE32(j);
+                ip_hdr->dst_addr = RTE_BE32(j);
 
-                    udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
-                    udp_hdr->dgram_len = RTE_BE16(sizeof(struct OBJECT_TEST) + sizeof(struct rte_udp_hdr));
-                    // udp_hdr->src_port = RTE_BE16(1);
-                    // udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
-                    udp_hdr->src_port = RTE_BE16(j);
-                    udp_hdr->dst_port = RTE_BE16(j);
-                    udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[pkt_id]->ol_flags);
-                    ip_hdr->hdr_checksum = 0;
+                udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
+                udp_hdr->dgram_len = pkt_size - sizeof(struct rte_ether_hdr) - sizeof(struct rte_ipv4_hdr);
+                // udp_hdr->src_port = RTE_BE16(1);
+                // udp_hdr->dst_port = RTE_BE16(rte_rand_max(UINT16_MAX));
+                udp_hdr->src_port = RTE_BE16(j);
+                udp_hdr->dst_port = RTE_BE16(j);
+                udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ip_hdr, pkt[pkt_id]->ol_flags);
+                ip_hdr->hdr_checksum = 0;
 
-                    // msg = (struct OBJECT_TEST *)(udp_hdr + 1);
+                size_t *element_number_ptr = rte_pktmbuf_mtod_offset(pkt[pkt_id], size_t *, 56);
+                *element_number_ptr = element_num;
+                kv_element *element = rte_pktmbuf_mtod_offset(pkt[pkt_id], kv_element *, 64);
+                for (size_t k = 0; k < element_num; k++) {
+                    element[k] = kv_elements[now_element_num];
+                    now_element_num++;
+                    if (now_element_num >= total_element_num) {
+                        now_element_num = 0;
+                    }
+                }
+                // msg = (struct OBJECT_TEST *)(udp_hdr + 1);
                     // memcpy(msg, &object_test, sizeof(object_test));
 
-                    pkt[pkt_id]->data_len = pkt_size;
-                    pkt[pkt_id]->pkt_len = pkt_size;
+                pkt[pkt_id]->data_len = pkt_size;
+                pkt[pkt_id]->pkt_len = pkt_size;
 
-                    pkt_id++;
-                }
+                pkt_id++;
+
             }
             if (pkt_id > 0) {
                 uint16_t nb_tx = rte_eth_tx_burst(portid, queueid, pkt, pkt_id);
@@ -296,10 +302,10 @@ l2fwd_main_loop(void) {
 
     switch (qconf->type) {
     case TRANSMIT_TYPE:
-        delay_send_package(qconf->port_id, qconf);
+        send_package(qconf->port_id, qconf);
         break;
     case RECEIVE_TYPE:
-        delay_receive_package(qconf->port_id, qconf);
+        receive_package(qconf->port_id, qconf);
         break;
     default:
         RTE_LOG(INFO, L2FWD, "illegal type %d\n", qconf->type);
@@ -398,6 +404,12 @@ int main(int argc, char **argv) {
     unsigned int nb_lcores = 0;
     unsigned int nb_mbufs;
     int tx_queue_count = 0, rx_queue_count = 0;
+
+    if (USE_DATASET) {
+        kv_elements = init_kv_elements_dataset(file_path);
+    } else {
+        kv_elements = init_kv_elements_uniform(UNIFORM_KEY_NUMBER);
+    }
 
     /* init EAL */
     ret = rte_eal_init(argc, argv);
@@ -509,10 +521,10 @@ int main(int argc, char **argv) {
 
     nb_mbufs = RTE_MIN(300000, NUM_MBUFS * nb_lcores);
     /* create the mbuf pool */
-    delay_pktmbuf_pool = rte_pktmbuf_pool_create(MEMPOOL_NAME, nb_mbufs,
+    kv_client_pktmbuf_pool = rte_pktmbuf_pool_create(MEMPOOL_NAME, nb_mbufs,
         MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
         rte_socket_id());
-    if (delay_pktmbuf_pool == NULL)
+    if (kv_client_pktmbuf_pool == NULL)
         rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
 
     /* Initialise each port */
@@ -568,7 +580,7 @@ int main(int argc, char **argv) {
             ret = rte_eth_rx_queue_setup(portid, i, nb_rxd,
                 rte_eth_dev_socket_id(portid),
                 &rxq_conf,
-                delay_pktmbuf_pool);
+                kv_client_pktmbuf_pool);
             if (ret < 0)
                 rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup:err=%d, port=%u\n",
                     ret, portid);
@@ -612,8 +624,8 @@ int main(int argc, char **argv) {
     check_all_ports_link_status(l2fwd_enabled_port_mask);
     ret = 0;
 
-    struct rte_ether_addr target_addr = { {0xa0, 0x88, 0xc2, 0x32, 0x04, 0x40} };
-    // struct rte_ether_addr target_addr = { {0x01, 0x01, 0x01, 0x01, 0x01, 0x01} };
+    // struct rte_ether_addr target_addr = { {0xa0, 0x88, 0xc2, 0x32, 0x04, 0x40} };
+    struct rte_ether_addr target_addr = { {0x01, 0x01, 0x01, 0x01, 0x01, 0x01} };
 
     for (size_t i = 0; i < 190; i++) {
         target_addrs[i] = target_addr;
